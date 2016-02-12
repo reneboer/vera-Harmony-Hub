@@ -1,0 +1,106 @@
+<implementation>
+	<specVersion>
+		<major>1</major>
+		<minor>0</minor>
+	</specVersion>
+	<settings>
+		<protocol>crlf</protocol>
+	</settings>
+	<handleChildren>1</handleChildren>
+	<files>L_Harmony.lua</files>
+    <incoming>
+		<lua>Harmony_Incoming(lul_data)</lua>
+    </incoming>
+	<startup>Harmony_init</startup>
+	<actionList>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>StartActivity</name>
+		<job>
+			Harmony_StartActivity(lul_settings.newActivityID or "")
+			return 4,nil
+		</job>
+		<jobname>StartActivity</jobname>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>GetCurrentActivityID</name>
+		<run>
+			local status, actID = Harmony_GetCurrentActivtyID()
+			return actID
+		</run>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>SetPollInterval</name>
+		<run>
+			-- Do no accept poll interval below 10 seconds to avoid hub overload
+			local newInt = tonumber(lul_settings.newPollInterval or "0")
+			if ((newInt ~= 0) and (newInt &lt; 10)) then newInt = 10 end
+			varSet("PollInterval", newInt)
+			-- When not zero start polling now
+			if (newInt ~= 0) then 
+				luup.call_delay("Harmony_PollCurrentActivity", newInt, "", false)
+			end	
+		</run>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>GetPollInterval</name>
+		<run>
+			return varGet("PollInterval")
+		</run>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>UpdateButtons</name>
+		<job>
+			Harmony_UpdateButtons(lul_device)
+			return 4,nil
+		</job>
+		<jobname>UpdateButtons</jobname>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>IssueDeviceCommand</name>
+		<job>
+			Harmony_IssueDeviceCommand(lul_settings.DeviceID or "", lul_settings.Command or "", lul_settings.Duration or "0")
+			return 4,nil
+		</job>
+		<jobname>IssueDeviceCommand</jobname>
+	</action>
+	<action>
+        <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
+		<name>SetTarget</name>
+		<job>
+			local newTarget = lul_settings.newTargetValue or ""
+			if (newTarget == '1') and (newActivityID ~= '') then 
+				local newActivityID = varGet('DefaultActivity') 
+				if (newActivityID ~= '') then 
+					Harmony_StartActivity(newActivityID)
+				end	
+			else 
+				Harmony_StartActivity('-1')
+			end
+			return 4,nil
+		</job>
+		<jobname>SetTarget</jobname>
+    </action>
+	<action>
+        <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
+		<name>GetTarget</name>
+		<run>
+			local val = varGet("Target", HData.DEVICE, HData.SWSID)
+			return val
+		</run>
+    </action>
+	<action>
+        <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
+		<name>GetStatus</name>
+		<run>
+			local val = varGet("Status", HData.DEVICE, HData.SWSID)
+			return val
+		</run>
+    </action>
+  </actionList>
+</implementation>

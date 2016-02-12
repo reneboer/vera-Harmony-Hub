@@ -1,0 +1,84 @@
+{
+	"flashicon": "icons\/Harmony.png",
+	"default_icon": "Harmony.png",
+    "inScene": "1",
+    "ToggleButton": 1,
+	"Tabs": [
+		{
+			"Label": {
+				"lang_tag": "tabname_control",
+				"text": "Control"
+			},
+			"Position": "0",
+			"TabType": "flash",
+			"SceneGroup": [
+				{
+					"id": "1",
+					"top": "0",
+					"left": "0",
+					"x": "2",
+					"y": "3"
+				}
+            ],
+			"ControlGroup": [
+				{
+					"id": "1",
+					"scenegroup": "1",
+					"isSingle": "1"
+				}
+			],
+			"Control": [
+				{
+					"ControlGroup": "1",
+                    "ControlType": "label",
+					"top": 0,
+					"left": 0,
+					"text_align": "left",
+                    "Label": {
+                        "lang_tag": "not_initialized",
+                        "text": "Plug in not yet initialized. Wait a moment and then Reload device and Browser."
+                    },
+					"Display": {
+						"Top": 70,
+						"Left": 50,
+						"Width": 350,
+						"Height": 20
+					},
+				}
+			]
+		},
+		{
+			"Label": {
+				"lang_tag": "advanced",
+				"text": "Advanced"
+			},
+			"Position": "4",
+			"TabType": "javascript",
+			"ScriptName": "shared.js",
+			"Function": "advanced_device"
+		},
+		{
+			"Label": {
+				"lang_tag": "logs",
+				"text": "Logs" 
+			},
+			"Position": "5",
+			"TabType": "javascript",
+			"ScriptName": "shared.js",
+			"Function": "device_logs" 
+		},
+		{
+			"Label": {
+				"lang_tag": "notifications",
+				"text": "Notifications" 
+			},
+			"Position": "6",
+			"TabType": "javascript",
+			"ScriptName": "shared.js",
+			"Function": "device_notifications" 
+		} 
+	],
+    "eventList2": [ ],
+	"device_type": "urn:schemas-rboer-com:device:Harmony:1",
+	"DeviceType": "urn:schemas-rboer-com:device:Harmony:1"
+}

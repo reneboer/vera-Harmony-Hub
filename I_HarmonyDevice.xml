@@ -1,0 +1,29 @@
+<implementation>
+	<specVersion>
+		<major>1</major>
+		<minor>0</minor>
+	</specVersion>
+	<settings></settings>
+	<functions></functions>
+	<startup></startup>
+	<actionList>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
+			<name>UpdateDeviceButtons</name>
+			<job>
+				Harmony_UpdateDeviceButtons(lul_device)
+				return 4,nil
+			</job>
+			<jobname>UpdateDeviceButtons</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
+			<name>SendDeviceCommand</name>
+			<job>
+				Harmony_SendDeviceCommand(lul_device,lul_settings.Command or "",lul_settings.Duration or "0")
+				return 4,nil
+			</job>
+			<jobname>SendDeviceCommand</jobname>
+		</action>
+	</actionList>
+</implementation>
