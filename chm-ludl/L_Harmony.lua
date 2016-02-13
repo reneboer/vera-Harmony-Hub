@@ -4,7 +4,8 @@
 --
 -- V2.6 Changes:
 --				openLuup support
---				handle harmony Hub response when new and current activty are the some one (to-do).
+--				handle harmony Hub response when new and current activty are the some one.
+-- 				Minor enhancements for ALTUI drawing after frist install
 --
 -- V2.5 Changes:
 --				Can define key-press duration for devices.
