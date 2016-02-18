@@ -1,6 +1,9 @@
 -- Module L_Harmony1.lua
 -- Written by R.Boer. 
--- V2.6 5 February 2016
+-- V2.6.1 15 February 2016
+--
+-- V2.6.1 Changes:
+--				Fix for openLuup support and proper definition of parent and child Device and Implementation files.
 --
 -- V2.6 Changes:
 --				openLuup support
@@ -73,7 +76,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.6",
+	Version = "2.6.1",
 	DEVICE = "",
 	Description = "Harmony Control",
 	SWSID = "urn:upnp-org:serviceId:SwitchPower1",
@@ -1583,7 +1586,11 @@ local function Harmony_CreateChildren()
 		else
 			-- See if the device specific files already exist, if not copy from base and adapt
 			local fname = 'D_HarmonyDevice'..HData.DEVICE..'_'..deviceID
-			f=io.open(HData.f_path..fname..'.xml.lzo',"r")
+			if (HData.onOpenLuup) then
+				f=io.open(HData.f_path..fname..'.xml',"r")
+			else	
+				f=io.open(HData.f_path..fname..'.xml.lzo',"r")
+			end	
 			if f~=nil then
 				-- Found, no actions needed
 				io.close(f)

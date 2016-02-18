@@ -18,8 +18,5 @@
         <SCPDURL>S_HarmonyDevice.xml</SCPDURL>
       </service>
     </serviceList>
-    <implementationList>
-      <implementationFile>I_HarmonyDevice.xml</implementationFile>
-    </implementationList>
   </device>
 </root>

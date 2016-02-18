@@ -6,7 +6,6 @@
 	<settings>
 		<protocol>crlf</protocol>
 	</settings>
-	<handleChildren>1</handleChildren>
 	<files>L_Harmony.lua</files>
     <incoming>
 		<lua>Harmony_Incoming(lul_data)</lua>
@@ -102,5 +101,23 @@
 			return val
 		</run>
     </action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
+			<name>UpdateDeviceButtons</name>
+			<job>
+				Harmony_UpdateDeviceButtons(lul_device)
+				return 4,nil
+			</job>
+			<jobname>UpdateDeviceButtons</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
+			<name>SendDeviceCommand</name>
+			<job>
+				Harmony_SendDeviceCommand(lul_device,lul_settings.Command or "",lul_settings.Duration or "0")
+				return 4,nil
+			</job>
+			<jobname>SendDeviceCommand</jobname>
+		</action>
   </actionList>
 </implementation>
