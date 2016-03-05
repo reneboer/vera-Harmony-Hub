@@ -79,7 +79,7 @@ var Harmony = (function (api) {
 			var html = '<div class="deviceCpanelSettingsPage">'+
 				'<h3>Device #'+deviceID+'&nbsp;&nbsp;&nbsp;'+api.getDisplayedDeviceName(deviceID)+'</h3>';
 			if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
-				html += '<br>&nbsp;<br>Plugin is disabled in Attributes.';
+				html += '<br>Plugin is disabled in Attributes.';
 			} else {	
 				html +=	htmlAddInput(deviceID, 'Harmony Hub IP Address', 20, 'IPAddress', HAM_SID, ip) + 
 				htmlAddInput(deviceID, 'Harmony Hub Email', 30, 'Email') + 
@@ -466,7 +466,7 @@ var Harmony = (function (api) {
 			'<tr><td>&nbsp;</td></tr>'+
 			'<tr><td>'+msg+'</td></tr>'+
 			'<tr><td>&nbsp;</td></tr>';
-		if (disabled !== false) {	
+		if (disabled !== true) {	
 			'<tr><td align="center">Please wait...</td></tr>';
 		}	
 		html += '</table></div></div>';

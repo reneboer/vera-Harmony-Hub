@@ -350,7 +350,7 @@ function hamhtmlSetLoadMessage(deviceID,typ,msg,disabled) {
 		'<tr><td>&nbsp;</td></tr>'+
 		'<tr><td>'+msg+'</td></tr>'+
 		'<tr><td>&nbsp;</td></tr>';
-	if (disabled !== false) {	
+	if (disabled !== true) {	
 		html += '<tr><td align="center">'+hamhtmlCreateIMG({src:"skins/default/images/status/ajax-loader.gif",
 					onerror:"if(this.src.indexOf(\"skins/default/icons/ajax-loader.gif\")>0) this.src=\"skins/default/images/status/ajax-loader.gif\";"+
 					"else this.src=\"skins/default/icons/ajax-loader.gif\"" })+'</td></tr>'+
