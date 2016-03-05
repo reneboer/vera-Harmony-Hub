@@ -1,8 +1,11 @@
 //# sourceURL=J_Harmony.js
 // harmony Hub Control UI json for UI5/UI6
 // Written by R.Boer. 
-// V2.5 13 October 2015
+// V2.7 3 March 2015
 //
+// V2.7 Changes:
+//		User can disable plugin. Signal status on control panel.
+///
 // V2.5 Changes:
 //		Can define key-press duration for devices.
 //		Layout improvements for native UI and ALTUI.
@@ -49,8 +52,11 @@ function hamSettings(deviceID) {
 		}
 	}
     var html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
-		'<tr><td colspan="2"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
-		'<tr><td width="250">Harmony Hub IP Address</td>'+
+		'<tr><td colspan="2"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>';
+	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
+		html += '<tr><td colspan="2">&nbsp;</td></tr><tr><td colspan="2">Plugin is disabled in Attributes.</td></tr>';
+	} else {		
+		html += '<tr><td width="250">Harmony Hub IP Address</td>'+
 		'<td><input type="text" id="device_'+deviceID+'_IP" size="30" value="'+((deviceObj.ip)?deviceObj.ip:'')+'" onChange="update_device('+deviceID+',this.value,\'jsonp.ud.devices['+devicePos+'].ip\');"></td></tr>'+
 		hamhtmlAddInput(deviceID, 'Harmony Hub email', 30, 'Email')+
 		hamhtmlAddInput(deviceID, 'Harmony Hub Password', 20, 'Password')+
@@ -61,29 +67,45 @@ function hamSettings(deviceID) {
 		hamhtmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo,true)+
 		hamhtmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo,true)+
 		hamhtmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel,true)+
-		hamhtmlAddInput(deviceID, 'Syslog server IP Address:Port', 30, 'Syslog')+ 
-	'</tbody></table>';
+		hamhtmlAddInput(deviceID, 'Syslog server IP Address:Port', 30, 'Syslog');
+	}	
+	html += '</tbody></table>';
     set_panel_html(html);
 }
 
 // Request HTML for activities tab
 function hamActivities(deviceID) {
-	hamhtmlSetLoadMessage(deviceID, 'AC', 'Loading activities from Harmony Hub.');
-	hamGetInfo(deviceID, HAM_SID, 'hamGetActivities', '', hamActivitiesHandler); 
+	var deviceObj = get_device_obj(deviceID);
+	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
+		hamhtmlSetLoadMessage(deviceID,'AC','Plugin is disabled in Attributes.',true);
+	} else {	
+		hamhtmlSetLoadMessage(deviceID, 'AC', 'Loading activities from Harmony Hub.',false);
+		hamGetInfo(deviceID, HAM_SID, 'hamGetActivities', '', hamActivitiesHandler); 
+	}	
 }
 
 // Return HTML for devices tab
 function hamDevices(deviceID) {
-	hamhtmlSetLoadMessage(deviceID, 'DH', 'Loading devices from Harmony Hub.');
-	hamGetInfo(deviceID, HAM_SID, 'hamGetDevices', '', hamDevicesHandler); 
+	var deviceObj = get_device_obj(deviceID);
+	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
+		hamhtmlSetLoadMessage(deviceID,'DH','Plugin is disabled in Attributes.',true);
+	} else {	
+		hamhtmlSetLoadMessage(deviceID, 'DH', 'Loading devices from Harmony Hub.',false);
+		hamGetInfo(deviceID, HAM_SID, 'hamGetDevices', '', hamDevicesHandler); 
+	}	
 }
 
 // Return HTML for device settings tab
 function hamDeviceSettings(deviceID) {
-	hamhtmlSetLoadMessage(deviceID, 'DS', 'Loading device commands from Harmony Hub.');
-	var devID = hamVarGet(deviceID,'DeviceID', HAM_CHSID);
 	var deviceObj = get_device_obj(deviceID);
-	hamGetInfo(deviceID, HAM_SID, 'hamGetDeviceCommands', devID, hamDeviceSettingsHandler, deviceObj.id_parent); 
+	var prntObj = get_device_obj(deviceObj.id_parent);
+	if (prntObj.disabled === '1' || prntObj.disabled === 1) {
+		hamhtmlSetLoadMessage(deviceID,'DS','Plugin is disabled in Parent Attributes.',true);
+	} else {	
+		hamhtmlSetLoadMessage(deviceID, 'DS', 'Loading device commands from Harmony Hub.',false);
+		var devID = hamVarGet(deviceID,'DeviceID', HAM_CHSID);
+		hamGetInfo(deviceID, HAM_SID, 'hamGetDeviceCommands', devID, hamDeviceSettingsHandler, deviceObj.id_parent); 
+	}	
 }
 
 // Build HTML for activities tab
@@ -320,19 +342,21 @@ function hamhtmlGetPulldownSelection(di, vr) {
 function hamhtmlSetMessage(msg) {
 	document.getElementById ("ham_msg").innerHTML = msg;
 }
-function hamhtmlSetLoadMessage(deviceID,typ,msg) {
+function hamhtmlSetLoadMessage(deviceID,typ,msg,disabled) {
 	var deviceObj = get_device_obj(deviceID);
 	var html = '<div id="hamID_content_'+typ+'_'+deviceID+'">'+
 		'<table width="100%" border="0"><tbody>'+
 		'<tr><td class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
 		'<tr><td>&nbsp;</td></tr>'+
 		'<tr><td>'+msg+'</td></tr>'+
-		'<tr><td>&nbsp;</td></tr>'+
-		'<tr><td align="center">'+hamhtmlCreateIMG({src:"skins/default/images/status/ajax-loader.gif",
+		'<tr><td>&nbsp;</td></tr>';
+	if (disabled !== false) {	
+		html += '<tr><td align="center">'+hamhtmlCreateIMG({src:"skins/default/images/status/ajax-loader.gif",
 					onerror:"if(this.src.indexOf(\"skins/default/icons/ajax-loader.gif\")>0) this.src=\"skins/default/images/status/ajax-loader.gif\";"+
 					"else this.src=\"skins/default/icons/ajax-loader.gif\"" })+'</td></tr>'+
-		'<tr><td align="center">Please wait...</td></tr>'+
-		'</tbody></table>'+
+		'<tr><td align="center">Please wait...</td></tr>';
+	}	
+	html += '</tbody></table>'+
 		'</div>';
     set_panel_html(html);
 }

@@ -1,69 +1,77 @@
--- Module L_Harmony1.lua
--- Written by R.Boer. 
--- V2.6.1 15 February 2016
---
--- V2.6.1 Changes:
---				Fix for openLuup support and proper definition of parent and child Device and Implementation files.
---
--- V2.6 Changes:
---				openLuup support
---				handle harmony Hub response when new and current activty are the some one.
--- 				Minor enhancements for ALTUI drawing after frist install
---
--- V2.5 Changes:
---				Can define key-press duration for devices.
---				Layout improvements for native UI and ALTUI.
--- 				Changed poll and acknowledge settings to drop down selections.
---				Proper JSON returns from LUA.
---				Fixed issue with multiple notifications.
---
--- V2.4 Changes:
---				AppMemoryUsed updated once per ten minutes and in debug mode only reducing CPU.
---				Set functions to local.
---				First stab at ALTUI support.
---				Fix on time out for starting an activity that creates multiple changes of CurrentActivityID variable.
---				Minor fix on StartActivite action.
---				Some JS Vera api optimizations for UI7.
--- V2.3 Changes:
---				Added AppMemoryUsed.
--- V2.2 Changes:
---				Fix for LUUP restart while there is no connection to the Hub.
--- V2.1 Changes:
---				Lowered time out as suggested by Starcruiser1229.
---				Added time out selection
---				Optimizations for UI7.05
---				On UI6 & UI7 the image links to correct location is done in LUA. No more install script.
---				Button text can be longer when less than five columns are needed.
---				Allow for maximum of 25 buttons in UI7.
--- V2.03 Changes:
---				Check for Busy status and reset to Idle if busy for more then a minute. Should avoid any deadlock situations.
--- 				No longer resetting the CurrentActivityID on a restart to avoid scenes to be re-triggered on reload.
--- V2.02 Changes:
---				Can show on/off status on Vera mobile app.
---				Added SetTarget 0/1 function to turn on default activity.
---				Removed options for MaxActivity and Device Buttons. Now just fixed.
---				Removed Enable Button Feedback option. Now uses Ok Acknowledge Interval value.
---				Added function to reload luup on UI5
--- V2.0 Changes:
---				Supports multiple instances of Hub and Device controllers
---				Includes migration from v1.7 & v1.8 to new provided there is one hub
---				Auto link to correct icon locations using harmony_install.sh
--- V1.9 Changes:
---				Added syslog server support and log level settings.
--- V1.7.1 Changes:
---				Fixed issue with JSON file writing
--- V1.7 Changes:
---				Added support Scene triggers for Child Devices
---				Added option to set local or remote icons
---				Added option for clear UI visual feedback on child device button click
---				Icons of child devices show busy status as well
---				Fixed Scene trigger
---				Fixed commands handling by sending status release after status press
---				Improved start-up handling
---
--- Control the harmony Hub
--- See forum topic http://forum.micasaverde.com/index.php/topic,14928.0.html
--- It seems that none of the elaborate authentication is used in the Hub version I have. So only SubmitCommand is implemented.
+--[==[
+	Module L_Harmony1.lua
+	
+	Written by R.Boer. 
+	V2.7 5 March 2016
+
+	V2.7 Changes: 
+				Fix for UI5 and other systems not having dkjson lib installed.
+				Fix for possible double scene triggers.
+				Support for disable attribute so you can disable the plugin without deinstallation. (to do)
+
+	V2.6.1 Changes:
+				Fix for openLuup support and proper definition of parent and child Device and Implementation files.
+
+	V2.6 Changes:
+				openLuup support
+				handle harmony Hub response when new and current activty are the some one.
+ 				Minor enhancements for ALTUI drawing after first install
+
+	V2.5 Changes:
+				Can define key-press duration for devices.
+				Layout improvements for native UI and ALTUI.
+ 				Changed poll and acknowledge settings to drop down selections.
+				Proper JSON returns from LUA.
+				Fixed issue with multiple notifications.
+
+	V2.4 Changes:
+				AppMemoryUsed updated once per ten minutes and in debug mode only reducing CPU.
+				Set functions to local.
+				First stab at ALTUI support.
+				Fix on time out for starting an activity that creates multiple changes of CurrentActivityID variable.
+				Minor fix on StartActivite action.
+				Some JS Vera api optimizations for UI7.
+	V2.3 Changes:
+				Added AppMemoryUsed.
+	V2.2 Changes:
+				Fix for LUUP restart while there is no connection to the Hub.
+	V2.1 Changes:
+				Lowered time out as suggested by Starcruiser1229.
+				Added time out selection
+				Optimizations for UI7.05
+				On UI6 & UI7 the image links to correct location is done in LUA. No more install script.
+				Button text can be longer when less than five columns are needed.
+				Allow for maximum of 25 buttons in UI7.
+	V2.03 Changes:
+				Check for Busy status and reset to Idle if busy for more then a minute. Should avoid any deadlock situations.
+ 				No longer resetting the CurrentActivityID on a restart to avoid scenes to be re-triggered on reload.
+	V2.02 Changes:
+				Can show on/off status on Vera mobile app.
+				Added SetTarget 0/1 function to turn on default activity.
+				Removed options for MaxActivity and Device Buttons. Now just fixed.
+				Removed Enable Button Feedback option. Now uses Ok Acknowledge Interval value.
+				Added function to reload luup on UI5
+	V2.0 Changes:
+				Supports multiple instances of Hub and Device controllers
+				Includes migration from v1.7 & v1.8 to new provided there is one hub
+				Auto link to correct icon locations using harmony_install.sh
+	V1.9 Changes:
+				Added syslog server support and log level settings.
+	V1.7.1 Changes:
+				Fixed issue with JSON file writing
+	V1.7 Changes:
+				Added support Scene triggers for Child Devices
+				Added option to set local or remote icons
+				Added option for clear UI visual feedback on child device button click
+				Icons of child devices show busy status as well
+				Fixed Scene trigger
+				Fixed commands handling by sending status release after status press
+				Improved start-up handling
+
+Control the harmony Hub
+	See forum topic http://forum.micasaverde.com/index.php/topic,14928.0.html
+	It seems that none of the elaborate authentication is used in the Hub version I have. So only SubmitCommand is implemented.
+--]==]
 
 local socketLib = require("socket")
 local json = require("dkjson")
@@ -76,7 +84,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.6.1",
+	Version = "2.7",
 	DEVICE = "",
 	Description = "Harmony Control",
 	SWSID = "urn:upnp-org:serviceId:SwitchPower1",
@@ -91,8 +99,9 @@ local HData = { -- Data used by Harmony Plugin
 	syslog,
 	MaxButtonUI5 = 24,  -- Keep the same as HAM_MAXBUTTONS in J_Harmony.js
 	MaxButtonUI7 = 25,  -- Keep the same as HAM_MAXBUTTONS in J_Harmony_UI7.js
---	LogLevel = 3,
-	LogLevel = 10,
+	Plugin_Disabled = false,
+	LogLevel = 3,
+--	LogLevel = 10,
 	Busy = false,
 	BusyChange = 0,
 	StartActivityBusy = 0,
@@ -167,7 +176,7 @@ local function varSet(name, value, device, service)
 	local service = service or HData.SID
 	local device = tonumber(device or HData.DEVICE)
 	local old = varGet(name, device, service)
-	if (tostring(value) ~= old) then 
+	if (tostring(value) ~= tostring(old)) then 
 		luup.variable_set(service, name, value, device)
 	end
 end
@@ -563,14 +572,15 @@ function Harmony_PollCurrentActivity()
 			local stat, actID = Harmony_GetCurrentActivtyID()
 			if (stat == true) then 
 				log('PollCurrentActivity found activity ID : ' .. actID,10) 
-				-- Set the target and activity so we can show off/on on Vera App
-				if (actID ~= '-1') then 
-					varSet("Target", "1", HData.DEVICE, HData.SWSID)
-					varSet("Status", "1", HData.DEVICE, HData.SWSID)
-				else 
-					varSet("Target", "0", HData.DEVICE, HData.SWSID)
-					varSet("Status", "0", HData.DEVICE, HData.SWSID)
-				end
+-- V2.7 Now in Harmony_GetCurrentActivtyID()
+--				-- Set the target and activity so we can show off/on on Vera App
+--				if (actID ~= '-1') then 
+--					varSet("Target", "1", HData.DEVICE, HData.SWSID)
+--					varSet("Status", "1", HData.DEVICE, HData.SWSID)
+--				else 
+--					varSet("Target", "0", HData.DEVICE, HData.SWSID)
+--					varSet("Status", "0", HData.DEVICE, HData.SWSID)
+--				end
 			else 
 				log('PollCurrentActivity error getting activity',10) 
 			end
@@ -702,6 +712,10 @@ end
 -- Input: devID = device ID, devCmd = device Command, devDur = key-press duration in seconds, hnd = true when called from HTTPhandler
 -- Output: True on success, or JSON when called from HTTPhandler
 function Harmony_IssueDeviceCommand(devID, devCmd, devDur, hnd, fmt)
+	if (HData.Plugin_Disabled == true) then
+		log("IssueDeviceCommand : Plugin disabled.",3)
+		return true
+	end
 	local cmd = 'issue_device_command'
 	local status, harmonyOutput
 	local message = ''
@@ -759,6 +773,10 @@ end
 -- Input: hnd = true when called from HTTPhandler
 -- Output: Activity ID on success, or JSON when called from HTTPhandler
 function Harmony_GetCurrentActivtyID(hnd, fmt)
+	if (HData.Plugin_Disabled == true) then
+		log("GetCurrentActivtyID : Plugin disabled.",3)
+		return true, "Plugin Disabled"
+	end
 	local cmd = 'get_current_activity_id'
 	local message = ''
 	local currentActivity = ''
@@ -779,6 +797,14 @@ function Harmony_GetCurrentActivtyID(hnd, fmt)
 		SetLastCommand(cmd)
 		log("GetCurrentActivtyID found activity : " .. currentActivity,10)
 		varSet("CurrentActivityID", currentActivity)
+		-- Set the target and activity so we can show off/on on Vera App
+		if (currentActivity ~= '-1') then 
+			varSet("Target", "1", HData.DEVICE, HData.SWSID)
+			varSet("Status", "1", HData.DEVICE, HData.SWSID)
+		else 
+			varSet("Target", "0", HData.DEVICE, HData.SWSID)
+			varSet("Status", "0", HData.DEVICE, HData.SWSID)
+		end
 	else
 		message = "failed to Get Current Activity...  errorcode="  .. cd .. ", errormessage=" .. msg
 		log("GetCurrentActivtyID, ERROR " .. message .. (harmonyOutput or "")) 
@@ -807,6 +833,10 @@ end
 -- Input: actID = activity ID, hnd = true when called from HTTPhandler
 -- Output: True on success, or JSON when called from HTTPhandler
 function Harmony_StartActivity(actID, hnd, fmt)
+	if (HData.Plugin_Disabled == true) then
+		log("StartActivity : Plugin disabled.",3)
+		return true
+	end
 	local cmd = 'start_activity'
 	local message = ''
 	local harmonyOutput = ''
@@ -828,9 +858,11 @@ function Harmony_StartActivity(actID, hnd, fmt)
 		-- Start activity
 		log("StartActivity, ActivityID : " .. actID,10)
 		-- Set value now to give quicker user feedback on UI
-		varSet("CurrentActivityID", actID)
+-- V2.7 causes issues when failing
+--		varSet("CurrentActivityID", actID)
 		status, cd, msg, harmonyOutput = Harmony_cmd (cmd, actID)
 		if (status == true) then
+			varSet("CurrentActivityID", actID)
 			-- Set the target and activity so we can show off/on on Vera App
 			if (actID ~= '-1') then 
 				varSet("Target", "1", HData.DEVICE, HData.SWSID)
@@ -842,7 +874,8 @@ function Harmony_StartActivity(actID, hnd, fmt)
 			SetLastCommand(cmd)
 		else
 			message = "failed to start Activity... errorcode="  .. cd .. ", errormessage=" .. msg
-			varSet("CurrentActivityID", "")
+-- V2.7 do not set if we do not know.
+--			varSet("CurrentActivityID", "")
 		end	
 	else
 		message = "no newActivityID specified... "
@@ -870,11 +903,15 @@ end
 
 -- , devDur = key-press duration in seconds
 function Harmony_SendDeviceCommand(lul_device,devCmd,devDur)
+	if (HData.Plugin_Disabled == true) then
+		log("SendDeviceCommand : Plugin disabled.",3)
+		return true
+	end
 	local cmd = (devCmd or "")
 	local dur = (devDur or "0")
 	local devID = varGet("DeviceID",lul_device, HData.CHSID)
 	local prevCmd = varGet("LastDeviceCommand",lul_device, HData.CHSID)
-	log("SendCommand "..cmd.." for device #"..lul_device.." to Harmony Device "..devID,10)
+	log("SendDeviceCommand "..cmd.." for device #"..lul_device.." to Harmony Device "..devID,10)
 	varSet("LastDeviceCommand",cmd,lul_device, HData.CHSID)
 	local starttime = os.time()
 	setStatusIcon(HData.Icon.BUSY, lul_device, HData.CHSID)
@@ -1446,7 +1483,7 @@ local function make_D_file(devID,name,prnt_id)
 	else	
 		os.execute('pluto-lzo c '..outpath..' '..outpath..'.lzo')
 		os.execute('rm -f '..outpath)
---		os.execute('rm -f '..inpath)
+		os.execute('rm -f '..inpath)
 	end	
 end
 
@@ -1543,16 +1580,23 @@ local function Harmony_CreateChildren()
 	log("Harmony_CreateChildren for device ",10)
 	local childDeviceIDs = defVar("PluginHaveChildren")
 	-- See if we have obsolete child xml or json files. If so remove them
-	removeObsoleteChildDeviceFiles(childDeviceIDs)
+	if (HData.Plugin_Disabled == false) then removeObsoleteChildDeviceFiles(childDeviceIDs) end
 	if (childDeviceIDs == '') then 
 		-- Note: we must continue this routine when there are no child devices as we may have ones that need to be deleted.
 		log("No child devices to create.",10)
 	else
 		log("Child devices to create : " ..childDeviceIDs,10)
 	end
-	-- Get the list of devices from the harmony
-	local retStat, Devices_t = Harmony_GetConfig('list_devices', "", HData.JS)
-	if (#Devices_t.devices == 0) then log("No devices returned from Harmony Hub.",10) end
+	-- Get the list of devices from the harmony when not disabled.
+	local retStat, Devices_t 
+	if (HData.Plugin_Disabled == false) then 
+		retStat, Devices_t = Harmony_GetConfig('list_devices', "", HData.JS)
+		if (#Devices_t.devices == 0) then log("No devices returned from Harmony Hub.",10) end
+	else
+		Devices_t = {}
+		Devices_t.devices = {}
+		retStat = false
+	end	
 	-- V2.2 Failed to get devices from HUB, determine current ones from defined plugins
 	if (retStat == false) then
 		log("Failed to obtain the current devices from Hub. Hub may be off. Will analyse current Child devices")
@@ -1682,12 +1726,28 @@ function Harmony_init(lul_device)
 	HData.DEVICE = lul_device
 	SetBusy(true,false)
 	setStatusIcon(HData.Icon.WAIT)
-	log("Harmony device #" .. HData.DEVICE .. " is initializing!",03)
+	log("Harmony device #" .. HData.DEVICE .. " is initializing!",3)
 	-- See if we are running on openLuup.
 	if (luup.version_major == 7) and (luup.version_minor == 0) then
 		HData.onOpenLuup = true
 		log("We are running on openLuup!!")
 	end
+	-- See if user disabled plug-in 
+	local isDisabled = luup.attr_get("disabled", HData.DEVICE)
+	if ((isDisabled == 1) or (isDisabled == "1")) then
+		log("Init: Plug-in version "..HData.Version.." - DISABLED",2)
+		HData.Plugin_Disabled = true
+		-- Still create any child devices so we do not loose configurations.
+		Harmony_CreateChildren()
+		-- Still register with ALTUI for proper drawing
+		Harmony_registerWithAltUI()
+		varSet("LinkStatus", "Plug-in disabled")
+		varSet("LastCommand", "--")
+		varSet("LastCommandTime", "--")
+		-- Now we are done. Mark device as disabled
+		return true, "Plug-in Disabled.", HData.Name
+	end
+
 	-- Set Alt ID on first run, may avoid issues
 	local altid = luup.attr_get('altid',HData.DEVICE) or ""
 	if (altid == "") then luup.attr_set('altid', 'HAM'..HData.DEVICE..'_CNTRL',HData.DEVICE) end
@@ -1744,6 +1804,14 @@ function Harmony_init(lul_device)
 	if (forcenewjson == true) then
 		-- Bump loglevel to monitor rewrite
 		luup.log("Force rewrite of JSON files for correct Vera software version and configuration.")
+		-- We may have some obsolete files, remove them.
+		if (HData.onOpenLuup) then
+			os.execute('rm -f '..HData.f_path ..'I_HarmonyDevice.xml')
+		else
+			os.execute('rm -f '..HData.f_path ..'D_HarmonyDevice.xml')
+			os.execute('rm -f '..HData.f_path ..'D_Harmony.xml')
+			os.execute('rm -f '..HData.f_path ..'I_HarmonyDevice.xml.lzo')
+		end
 		-- Set the category to switch if needed
 		local catid = luup.attr_get('category_num',HData.DEVICE) or ""
 		if (catid ~= '3') then luup.attr_set('category_num', '3',HData.DEVICE) end

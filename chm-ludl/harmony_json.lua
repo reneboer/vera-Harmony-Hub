@@ -1,3 +1,6 @@
+-- Modified dkjson library incase it is missing.
+-- for harmony Plugin V2.7 and up. 
+
 -- global dependencies:
 
 local pairs, type, tostring, tonumber, getmetatable, setmetatable, rawset =
@@ -10,7 +13,7 @@ local strrep, gsub, strsub, strbyte, strchar, strfind, strlen, strformat =
 local concat = table.concat
 
 
-module("json")
+module("harmony_json")
 
     --[==[
 

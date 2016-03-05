@@ -1,7 +1,11 @@
 //# sourceURL=J_Harmony_UI7.js
 // harmony Hub Control UI for UI7
 // Written by R.Boer. 
-// V2.5 13 October 2015
+// V2.7 3 March 2016
+//
+// V2.7 Changes:
+//		User can disable plugin. Signal status on control panel.
+//		No more reference to myInterface, using correct api.ui calls instead.
 //
 // V2.5 Changes:
 //		Can define key-press duration for devices.
@@ -73,8 +77,11 @@ var Harmony = (function (api) {
 				}
 			}
 			var html = '<div class="deviceCpanelSettingsPage">'+
-				'<h3>Device #'+deviceID+'&nbsp;&nbsp;&nbsp;'+api.getDisplayedDeviceName(deviceID)+'</h3>'+
-				htmlAddInput(deviceID, 'Harmony Hub IP Address', 20, 'IPAddress', HAM_SID, ip) + 
+				'<h3>Device #'+deviceID+'&nbsp;&nbsp;&nbsp;'+api.getDisplayedDeviceName(deviceID)+'</h3>';
+			if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
+				html += '<br>&nbsp;<br>Plugin is disabled in Attributes.';
+			} else {	
+				html +=	htmlAddInput(deviceID, 'Harmony Hub IP Address', 20, 'IPAddress', HAM_SID, ip) + 
 				htmlAddInput(deviceID, 'Harmony Hub Email', 30, 'Email') + 
 				htmlAddInput(deviceID, 'Harmony Hub Password', 20, 'Password')+
 				htmlAddPulldown(deviceID, 'Harmony Hub communication time out', 'CommTimeOut', timeOuts)+
@@ -85,8 +92,9 @@ var Harmony = (function (api) {
 				htmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo)+
 				htmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel)+
 				htmlAddInput(deviceID, 'Syslog server IP Address:Port', 30, 'Syslog') + 
-				htmlAddButton(deviceID, 'UpdateSettings')+
-			'</div>';
+				htmlAddButton(deviceID, 'UpdateSettings');
+			}
+			html += '</div>';
 			api.setCpanelContent(html);
         } catch (e) {
             Utils.logError('Error in Harmony.Settings(): ' + e);
@@ -98,8 +106,14 @@ var Harmony = (function (api) {
 		_init();
         try {
 			var deviceID = api.getCpanelDeviceId();
-			htmlSetLoadMessage(deviceID,'AC','Loading activities from Harmony Hub.');
-			getInfo(deviceID, HAM_SID, 'hamGetActivities', '', _ActivitiesHandler); 
+			var deviceObj = api.getDeviceObject(deviceID);
+			if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
+				htmlSetLoadMessage(deviceID,'AC','Plugin is disabled in Attributes.',true);
+				showBusy(false);
+			} else {	
+				htmlSetLoadMessage(deviceID,'AC','Loading activities from Harmony Hub.',false);
+				getInfo(deviceID, HAM_SID, 'hamGetActivities', '', _ActivitiesHandler); 
+			}	
         } catch (e) {
             Utils.logError('Error in Harmony.Activities(): ' + e);
         }
@@ -110,8 +124,14 @@ var Harmony = (function (api) {
 		_init();
         try {
 			var deviceID = api.getCpanelDeviceId();
-			htmlSetLoadMessage(deviceID,'DH','Loading devices from Harmony Hub.');
-			getInfo(deviceID, HAM_SID, 'hamGetDevices', '', _DevicesHandler); 
+			var deviceObj = api.getDeviceObject(deviceID);
+			if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
+				htmlSetLoadMessage(deviceID,'DH','Plugin is disabled in Attributes.',true);
+				showBusy(false);
+			} else {	
+				htmlSetLoadMessage(deviceID,'DH','Loading devices from Harmony Hub.',false);
+				getInfo(deviceID, HAM_SID, 'hamGetDevices', '', _DevicesHandler); 
+			}	
         } catch (e) {
             Utils.logError('Error in Harmony.Devices(): ' + e);
         }
@@ -122,10 +142,16 @@ var Harmony = (function (api) {
 		_init();
         try {
 			var deviceID = api.getCpanelDeviceId();
-			htmlSetLoadMessage(deviceID,'DS','Loading device commands from Harmony Hub.');
-			var devID = varGet(deviceID,'DeviceID',HAM_CHSID);
 			var deviceObj = api.getDeviceObject(deviceID);
-			getInfo(deviceID, HAM_SID, 'hamGetDeviceCommands', devID, _DeviceSettingsHandler, deviceObj.id_parent); 
+			var prntObj = api.getDeviceObject(deviceObj.id_parent);
+			if (prntObj.disabled === '1' || prntObj.disabled === 1) {
+				htmlSetLoadMessage(deviceID,'DS','Plugin is disabled in Parent Attributes.',true);
+				showBusy(false);
+			} else {	
+				htmlSetLoadMessage(deviceID,'DS','Loading device commands from Harmony Hub.',false);
+				var devID = varGet(deviceID,'DeviceID',HAM_CHSID);
+				getInfo(deviceID, HAM_SID, 'hamGetDeviceCommands', devID, _DeviceSettingsHandler, deviceObj.id_parent); 
+			}	
         } catch (e) {
             Utils.logError('Error in Harmony.DeviceSettings(): ' + e);
         }
@@ -270,19 +296,20 @@ var Harmony = (function (api) {
 		varSet(deviceID,'LogLevel',htmlGetPulldownSelection(deviceID, 'LogLevel'));
 		varSet(deviceID,'Syslog',htmlGetElemVal(deviceID, 'Syslog'));
 		var ipa = htmlGetElemVal(deviceID, 'IPAddress');
-console.error('_UpdateSettings ipa ' + ipa);
-		//if (Utils.isValidIp(ipa)) {
+		if (Utils.isValidIp(ipa)) {
 			api.setDeviceAttribute(deviceID, 'ip', ipa);
-		//}
+		}
 		application.sendCommandSaveUserData(true);
 		doReload(deviceID);
 		setTimeout(function() {
 			showBusy(false);
 			try {
-				myInterface.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0);
+//				myInterface.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0);
+				api.ui.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0);
 			}
 			catch (e) {
-				Utils.logError('Harmony: UpdateSettings(): ' + e);
+				myInterface.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0); // ALTUI
+//				Utils.logError('Harmony: UpdateSettings(): ' + e);
 			}
 		}, 3000);	
 	}
@@ -420,25 +447,29 @@ console.error('_UpdateSettings ipa ' + ipa);
 	function htmlSetMessage(msg,error) {
 		try {
 			if (error === true) {
-				myInterface.showMessagePopupError(msg);
+//				myInterface.showMessagePopupError(msg);
+				api.ui.showMessagePopupError(msg);
 			} else {
-				myInterface.showMessagePopup(msg,0);
+//				myInterface.showMessagePopup(msg,0);
+				api.ui.showMessagePopup(msg,0);
 			}	
 		}	
 		catch (e) {	
 			$("#ham_msg").html(msg+'<br>&nbsp;');
 		}	
 	}
-	function htmlSetLoadMessage(deviceID,typ,msg) {
+	function htmlSetLoadMessage(deviceID,typ,msg,disabled) {
 		var html = '<div class="deviceCpanelSettingsPage">'+
 			'<h3>Device #'+deviceID+'&nbsp;&nbsp;&nbsp;'+api.getDisplayedDeviceName(deviceID)+'</h3>';
 		html += '<div id="hamID_content_'+typ+'_'+deviceID+'">'+
 			'<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
 			'<tr><td>&nbsp;</td></tr>'+
 			'<tr><td>'+msg+'</td></tr>'+
-			'<tr><td>&nbsp;</td></tr>'+
-			'<tr><td align="center">Please wait...</td></tr>'+
-			'</table></div></div>';
+			'<tr><td>&nbsp;</td></tr>';
+		if (disabled !== false) {	
+			'<tr><td align="center">Please wait...</td></tr>';
+		}	
+		html += '</table></div></div>';
 		api.setCpanelContent(html);
 		showBusy(true);
 	}
@@ -550,12 +581,16 @@ console.error('_UpdateSettings ipa ' + ipa);
 	function showBusy(busy) {
 		if (busy === true) {
 			try {
-					myInterface.showStartupModalLoading(); // version v1.7.437 and up
-				} catch (e) {
-					api.ui.startupShowModalLoading(); // Prior versions.
-				}
+				api.ui.showStartupModalLoading(); // version v1.7.437 and up
+			} catch (e) {
+				api.ui.startupShowModalLoading(); // Prior versions.
+			}
 		} else {
-			myInterface.hideModalLoading(true);
+			try {
+				api.ui.hideModalLoading(true);
+			} catch (e) {
+				myInterface.hideModalLoading(true); // For ALTUI support
+			}	
 		}
 	}
 
