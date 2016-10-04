@@ -1,0 +1,11 @@
+<implementation>
+	<specVersion>
+		<major>1</major>
+		<minor>0</minor>
+	</specVersion>
+	<settings>
+		<protocol>crlf</protocol>
+	</settings>
+	<actionList>
+  </actionList>
+</implementation>
