@@ -1825,11 +1825,11 @@ function Harmony_init(lul_device)
 		luup.log("Force rewrite of JSON files for correct Vera software version and configuration.")
 		-- We may have some obsolete files, remove them.
 		if (HData.onOpenLuup) then
-			os.execute('rm -f '..HData.f_path ..'I_HarmonyDevice.xml')
+--			os.execute('rm -f '..HData.f_path ..'I_HarmonyDevice.xml')
 		else
 			os.execute('rm -f '..HData.f_path ..'D_HarmonyDevice.xml')
 			os.execute('rm -f '..HData.f_path ..'D_Harmony.xml')
-			os.execute('rm -f '..HData.f_path ..'I_HarmonyDevice.xml.lzo')
+--			os.execute('rm -f '..HData.f_path ..'I_HarmonyDevice.xml.lzo')  -- Don't on last UI7 version
 		end
 		-- Set the category to switch if needed
 		local catid = luup.attr_get('category_num',HData.DEVICE) or ""
