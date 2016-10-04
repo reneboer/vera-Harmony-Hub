@@ -2,13 +2,21 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.7 5 March 2016
+	V2.9 4 October 2016
+	
+	V2.9 Changes:
+				Child devices no longer show the delete button when newly created.
+				When the SetTarget newTarget is current Target then no action. Before newTarget=1 would always change to default activity.
+
+	V2.8 Changes:
+				Child devices no longer show the delete button.
+				Extra check on length of returned activity ID. Seems scambled after a failed poll (openLuup issue only?)
 
 	V2.7 Changes: 
 				Fix for UI5 and other systems not having dkjson lib installed.
 				Fix for possible double scene triggers.
-				Support for disable attribute so you can disable the plugin without deinstallation. (to do)
-
+				Support for disable attribute so you can disable the plugin without deinstallation. 
+				
 	V2.6.1 Changes:
 				Fix for openLuup support and proper definition of parent and child Device and Implementation files.
 
@@ -84,7 +92,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.7",
+	Version = "2.9",
 	DEVICE = "",
 	Description = "Harmony Control",
 	SWSID = "urn:upnp-org:serviceId:SwitchPower1",
@@ -793,21 +801,30 @@ function Harmony_GetCurrentActivtyID(hnd, fmt)
 	local status, cd, msg, harmonyOutput = Harmony_cmd(cmd)
 	if (status == true) then
 		log("GetCurrentActivtyID : " .. (harmonyOutput or ""),10)
-		currentActivity = harmonyOutput:match('result=(-?[0-9]*)')
-		SetLastCommand(cmd)
-		log("GetCurrentActivtyID found activity : " .. currentActivity,10)
-		varSet("CurrentActivityID", currentActivity)
-		-- Set the target and activity so we can show off/on on Vera App
-		if (currentActivity ~= '-1') then 
-			varSet("Target", "1", HData.DEVICE, HData.SWSID)
-			varSet("Status", "1", HData.DEVICE, HData.SWSID)
-		else 
-			varSet("Target", "0", HData.DEVICE, HData.SWSID)
-			varSet("Status", "0", HData.DEVICE, HData.SWSID)
+		-- Check length of reported activity, if 2 or 8
+		local ln = harmonyOutput:len()
+		if (ln == 9 or ln == 15) then
+			currentActivity = harmonyOutput:match('result=(-?[0-9]*)')
+			SetLastCommand(cmd)
+			log("GetCurrentActivtyID found activity : " .. currentActivity,10)
+			varSet("CurrentActivityID", currentActivity)
+			-- Set the target and activity so we can show off/on on Vera App
+			if (currentActivity ~= '-1') then 
+				varSet("Target", "1", HData.DEVICE, HData.SWSID)
+				varSet("Status", "1", HData.DEVICE, HData.SWSID)
+			else 
+				varSet("Target", "0", HData.DEVICE, HData.SWSID)
+				varSet("Status", "0", HData.DEVICE, HData.SWSID)
+			end
+		else
+			message = "failed to Get Current Activity...  errorcode="  .. cd .. ", errormessage=" .. msg
+			log("GetCurrentActivtyID, ERROR " .. message .. " : " .. (harmonyOutput or "")) 
+			currentActivity = ''
+			status = false
 		end
 	else
 		message = "failed to Get Current Activity...  errorcode="  .. cd .. ", errormessage=" .. msg
-		log("GetCurrentActivtyID, ERROR " .. message .. (harmonyOutput or "")) 
+		log("GetCurrentActivtyID, ERROR " .. message ..  " : " .. (harmonyOutput or "")) 
 	end	
 	if (hnd == false) then
 		-- When not called from HTTP Request handler, clear busy status
@@ -1645,7 +1662,7 @@ local function Harmony_CreateChildren()
 				make_D_file(deviceID,'HarmonyDevice',HData.DEVICE)
 				make_JSON_file(deviceID,'D_HarmonyDevice',false,true,nil,HData.DEVICE)
 			end
-			local init = HData.CHSID..",DeviceID=".. deviceID.."\n"..HData.CHSID..",HubName="..luup.devices[HData.DEVICE].description
+			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.CHSID..",DeviceID=".. deviceID.."\n"..HData.CHSID..",HubName="..luup.devices[HData.DEVICE].description
 			local name = "HRM: " .. string.gsub(desc, "%s%(.+%)", "")
 			log("Child device id " .. altid .. " (" .. name .. "), number " .. deviceID,10)
 			luup.chdev.append(
@@ -1697,7 +1714,8 @@ function Harmony_registerWithAltUI()
 			if luup.is_ready(k) then
 				log("Found ALTUI device "..k.." registering devices.")
 				local arguments = {}
-				arguments["newDeviceType"] = "urn:schemas-rboer-com:device:Harmony"..HData.DEVICE..":1"	
+--				arguments["newDeviceType"] = "urn:schemas-rboer-com:device:Harmony"..HData.DEVICE..":1"	
+				arguments["newDeviceType"] = "urn:schemas-rboer-com:device:Harmony:1"	
 				arguments["newScriptFile"] = "J_ALTUI_Harmony.js"	
 				arguments["newDeviceDrawFunc"] = "ALTUI_HarmonyDisplays.drawHarmony"	
 				arguments["newStyleFunc"] = ""	
@@ -1707,11 +1725,12 @@ function Harmony_registerWithAltUI()
 				luup.call_action(HData.ALTUI_SID, "RegisterPlugin", arguments, k)
 				-- Child devices
 				arguments["newDeviceDrawFunc"] = "ALTUI_HarmonyDisplays.drawHarmonyDevice"	
-				local childDeviceIDs = varGet("PluginHaveChildren") .. ","
-				for deviceID in childDeviceIDs:gmatch("(%w+),") do
-					arguments["newDeviceType"] = "urn:schemas-rboer-com:device:HarmonyDevice"..HData.DEVICE.."_"..deviceID..":1"	
+--				local childDeviceIDs = varGet("PluginHaveChildren") .. ","
+--				for deviceID in childDeviceIDs:gmatch("(%w+),") do
+--					arguments["newDeviceType"] = "urn:schemas-rboer-com:device:HarmonyDevice"..HData.DEVICE.."_"..deviceID..":1"	
+					arguments["newDeviceType"] = "urn:schemas-rboer-com:device:HarmonyDevice:1"	
 					luup.call_action(HData.ALTUI_SID, "RegisterPlugin", arguments, k)
-				end	
+--				end	
 			else
 				log("ALTUI plugin is not yet ready, retry in a bit..")
 				luup.call_delay("Harmony_registerWithAltUI", 10, "", false)
@@ -1745,7 +1764,7 @@ function Harmony_init(lul_device)
 		varSet("LastCommand", "--")
 		varSet("LastCommandTime", "--")
 		-- Now we are done. Mark device as disabled
-		return true, "Plug-in Disabled.", HData.Name
+		return true, "Plug-in Disabled.", HData.Description
 	end
 
 	-- Set Alt ID on first run, may avoid issues
@@ -1835,6 +1854,8 @@ function Harmony_init(lul_device)
 						local catid = luup.attr_get('category_num',devNo) or ""
 						if (catid ~= '3') then luup.attr_set('category_num', '3',devNo) end
 						luup.log("Rewritten files for child device # " .. devNo .. " name " .. chdevID)
+						-- Hide the delete button for the child devices
+						defVar("HideDeleteButton", 1, devNo, "urn:micasaverde-com:serviceId:HaDevice1")
 					else
 						luup.log("Child device # " .. devNo .. " does not have a matching DeviceID set.")
 					end	

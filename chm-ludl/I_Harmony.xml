@@ -73,13 +73,16 @@
 		<name>SetTarget</name>
 		<job>
 			local newTarget = lul_settings.newTargetValue or ""
-			if (newTarget == '1') and (newActivityID ~= '') then 
-				local newActivityID = varGet('DefaultActivity') 
-				if (newActivityID ~= '') then 
-					Harmony_StartActivity(newActivityID)
-				end	
-			else 
-				Harmony_StartActivity('-1')
+			local curTarget = varGet("Target", HData.DEVICE, HData.SWSID)
+			if (newTarget ~= curTarget) then
+				if (newTarget == '1') then 
+					local newActivityID = varGet('DefaultActivity') 
+					if (newActivityID ~= '') then 
+						Harmony_StartActivity(newActivityID)
+					end	
+				else 
+					Harmony_StartActivity('-1')
+				end
 			end
 			return 4,nil
 		</job>
@@ -101,23 +104,23 @@
 			return val
 		</run>
     </action>
-		<action>
-			<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
-			<name>UpdateDeviceButtons</name>
-			<job>
-				Harmony_UpdateDeviceButtons(lul_device)
-				return 4,nil
+	<action>
+		<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
+		<name>UpdateDeviceButtons</name>
+		<job>
+			Harmony_UpdateDeviceButtons(lul_device)
+			return 4,nil
+		</job>
+		<jobname>UpdateDeviceButtons</jobname>
+	</action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
+		<name>SendDeviceCommand</name>
+		<job>
+			Harmony_SendDeviceCommand(lul_device,lul_settings.Command or "",lul_settings.Duration or "0")
+			return 4,nil
 			</job>
-			<jobname>UpdateDeviceButtons</jobname>
-		</action>
-		<action>
-			<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
-			<name>SendDeviceCommand</name>
-			<job>
-				Harmony_SendDeviceCommand(lul_device,lul_settings.Command or "",lul_settings.Duration or "0")
-				return 4,nil
-			</job>
-			<jobname>SendDeviceCommand</jobname>
-		</action>
+		<jobname>SendDeviceCommand</jobname>
+	</action>
   </actionList>
 </implementation>
