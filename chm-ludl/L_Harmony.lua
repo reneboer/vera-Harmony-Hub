@@ -2,8 +2,11 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.9 4 October 2016
+	V2.10 7 November 2016
 	
+	V2.10 Changes:
+				Fix for support on activities other then 8 digits long.
+
 	V2.9 Changes:
 				Child devices no longer show the delete button when newly created.
 				When the SetTarget newTarget is current Target then no action. Before newTarget=1 would always change to default activity.
@@ -92,7 +95,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.9",
+	Version = "2.10",
 	DEVICE = "",
 	Description = "Harmony Control",
 	SWSID = "urn:upnp-org:serviceId:SwitchPower1",
@@ -801,10 +804,14 @@ function Harmony_GetCurrentActivtyID(hnd, fmt)
 	local status, cd, msg, harmonyOutput = Harmony_cmd(cmd)
 	if (status == true) then
 		log("GetCurrentActivtyID : " .. (harmonyOutput or ""),10)
-		-- Check length of reported activity, if 2 or 8
-		local ln = harmonyOutput:len()
-		if (ln == 9 or ln == 15) then
-			currentActivity = harmonyOutput:match('result=(-?[0-9]*)')
+-- V2.10 start
+--		-- Check length of reported activity, if 2 or 8
+--		local ln = harmonyOutput:len()
+--		if (l == 9 or ln == 15) then
+--			currentActivity = harmonyOutput:match('result=(-?[0-9]*)')
+		currentActivity = harmonyOutput:match('result=(-?[0-9]*)') or ''
+		if (tonumber(currentActivity)) then
+--V2.10 end		
 			SetLastCommand(cmd)
 			log("GetCurrentActivtyID found activity : " .. currentActivity,10)
 			varSet("CurrentActivityID", currentActivity)
@@ -819,7 +826,7 @@ function Harmony_GetCurrentActivtyID(hnd, fmt)
 		else
 			message = "failed to Get Current Activity...  errorcode="  .. cd .. ", errormessage=" .. msg
 			log("GetCurrentActivtyID, ERROR " .. message .. " : " .. (harmonyOutput or "")) 
-			currentActivity = ''
+-- V2.10			currentActivity = ''
 			status = false
 		end
 	else
@@ -833,14 +840,13 @@ function Harmony_GetCurrentActivtyID(hnd, fmt)
 		return status, currentActivity
 	else
 		local dataTab = {}
+		dataTab.currentactivityid = currentActivity
 		if (status) then 
 			dataTab.status = HData.OK
 			dataTab.message = HData.MSG_OK
-			dataTab.currentactivityid = currentActivity
 		else 
 			dataTab.status = HData.ER 
 			dataTab.message = message .. (harmonyOutput or "")
-			dataTab.currentactivityid = ''
 		end
 		return status, dataTab
 	end	
@@ -1697,12 +1703,12 @@ function Harmony_Setup()
 	-- Look for current activity to start off with
 	luup.call_delay("Harmony_PollCurrentActivity", 6, "", false)
 	-- If debug level, keep tap on memory usage too.
-	local ll = varGet("LogLevel")
-	if (ll == "10") then
+--	local ll = varGet("LogLevel")
+--	if (ll == "10") then
 		checkMemory()
-	else
-		varSet("AppMemoryUsed", "Nop")
-	end
+--	else
+--		varSet("AppMemoryUsed", "Nop")
+--	end
 	setStatusIcon(HData.Icon.IDLE)
 	return true
 end
