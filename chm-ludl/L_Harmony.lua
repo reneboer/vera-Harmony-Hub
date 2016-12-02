@@ -2,8 +2,11 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.10 7 November 2016
+	V2.11 2 December 2016
 	
+	V2.11 Changes:
+				Fix for repeats of startActivity with same value.
+
 	V2.10 Changes:
 				Fix for support on activities other then 8 digits long.
 
@@ -95,7 +98,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.10",
+	Version = "2.11",
 	DEVICE = "",
 	Description = "Harmony Control",
 	SWSID = "urn:upnp-org:serviceId:SwitchPower1",
@@ -334,7 +337,8 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut)
 	local CMD_DATA = { OK = "No Data", ERR = "" }
 	local PAT_ERRCODE = { PAT = "errorcode='%d-'", DEF = "errorcode='" .. ERR_CD.OK .. "'", ST = 12, EN = -2 }
 	local PAT_ERRMSG = { PAT = "errorstring='.-'", DEF = "errorstring='" .. ERR_MSG.OK .. "'", ST = 14, EN = -2 }
-	local PAT_DATA = { PAT = "!%[CDATA%[.+%]%]></oa>", DEF = "![CDATA[" .. CMD_DATA.OK .. "]]></oa>", ST = 9, EN = -9}
+--	local PAT_DATA = { PAT = "!%[CDATA%[.+%]%]></oa>", DEF = "![CDATA[" .. CMD_DATA.OK .. "]]></oa>", ST = 9, EN = -9}
+	local PAT_DATA = { PAT = "!%[CDATA%[.+%]%]>", DEF = "![CDATA[" .. CMD_DATA.OK .. "]]>", ST = 9, EN = -4}
 	local numberOfMessages = 5	-- Number of messages returned on holdAction command.
 	local timestamp = 10000
 	local sock
@@ -486,11 +490,12 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut)
 					-- get message length part, then the message
 					_ = GetHubResponse('/>')
 					msgResp = GetHubResponse('</message>')
---					msgcnt = msgcnt + 1
+					if (cmd == 'startactivity') then 
+						cmdResp = msgResp:match(PAT_DATA.PAT) or PAT_DATA.DEF
+						cmdResp = cmdResp:sub(PAT_DATA.ST,PAT_DATA.EN)
+						if (cmdResp == "activityId="..id) then done = true end
+					end
 					starttime = os.time()
---					-- See if we got last message that activity has started as this may the way the 3.x hub does it
---					local pos = msgResp:find('harmony%.engine%?startActivityFinished')
---					if ((pos ~= nil) or (msgcnt == numberOfMessages)) then done = true end
 				else
 					-- Not sure what we are getting after the normal acknowledge, but return it
 					log("SubmitCommand, invalid response from Hub after acknowledge |" .. (ret or "") .."|",10) 
