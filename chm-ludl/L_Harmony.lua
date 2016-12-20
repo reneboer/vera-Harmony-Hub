@@ -2,8 +2,11 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.11 2 December 2016
+	V2.12 20 December 2016
 	
+	V2.12 Changes:
+				Support for preset house mode settings.
+
 	V2.11 Changes:
 				Fix for repeats of startActivity with same value.
 
@@ -98,9 +101,10 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.11",
+	Version = "2.12",
 	DEVICE = "",
 	Description = "Harmony Control",
+	HADSID = "urn:micasaverde-com:serviceId:HaDevice1",
 	SWSID = "urn:upnp-org:serviceId:SwitchPower1",
 	SID = "urn:rboer-com:serviceId:Harmony1",
 	CHSID = "urn:rboer-com:serviceId:HarmonyDevice1",
@@ -588,15 +592,6 @@ function Harmony_PollCurrentActivity()
 			local stat, actID = Harmony_GetCurrentActivtyID()
 			if (stat == true) then 
 				log('PollCurrentActivity found activity ID : ' .. actID,10) 
--- V2.7 Now in Harmony_GetCurrentActivtyID()
---				-- Set the target and activity so we can show off/on on Vera App
---				if (actID ~= '-1') then 
---					varSet("Target", "1", HData.DEVICE, HData.SWSID)
---					varSet("Status", "1", HData.DEVICE, HData.SWSID)
---				else 
---					varSet("Target", "0", HData.DEVICE, HData.SWSID)
---					varSet("Status", "0", HData.DEVICE, HData.SWSID)
---				end
 			else 
 				log('PollCurrentActivity error getting activity',10) 
 			end
@@ -886,8 +881,6 @@ function Harmony_StartActivity(actID, hnd, fmt)
 		-- Start activity
 		log("StartActivity, ActivityID : " .. actID,10)
 		-- Set value now to give quicker user feedback on UI
--- V2.7 causes issues when failing
---		varSet("CurrentActivityID", actID)
 		status, cd, msg, harmonyOutput = Harmony_cmd (cmd, actID)
 		if (status == true) then
 			varSet("CurrentActivityID", actID)
@@ -902,8 +895,6 @@ function Harmony_StartActivity(actID, hnd, fmt)
 			SetLastCommand(cmd)
 		else
 			message = "failed to start Activity... errorcode="  .. cd .. ", errormessage=" .. msg
--- V2.7 do not set if we do not know.
---			varSet("CurrentActivityID", "")
 		end	
 	else
 		message = "no newActivityID specified... "
@@ -929,7 +920,7 @@ function Harmony_StartActivity(actID, hnd, fmt)
 	end	
 end
 
--- , devDur = key-press duration in seconds
+--  devDur = key-press duration in seconds
 function Harmony_SendDeviceCommand(lul_device,devCmd,devDur)
 	if (HData.Plugin_Disabled == true) then
 		log("SendDeviceCommand : Plugin disabled.",3)
@@ -954,6 +945,7 @@ function Harmony_SendDeviceCommand(lul_device,devCmd,devDur)
 	end
 	return status
 end
+
 -- Clear the last device command after no button has been clicked for more then OkInterval seconds
 function Harmony_SendDeviceCommandEnd(devID)
 	log('SendDeviceCommandEnd for child device #'..devID,10)
@@ -1060,7 +1052,6 @@ function HTTP_HarmonyInt (lul_request, lul_parameters, lul_outputformat)
 	if (GetBusy()) then
 		log('Busy processing other request, sleep a second.',10)
 		return 'Busy processing other request. Please retry in a moment.'
---		luup.sleep(1000)
 	end
 	SetBusy(true,true)
 	log('request is: '..tostring(lul_request),10)
@@ -1153,6 +1144,7 @@ local function buildJsonStateIcon(icon,var,val,sid)
 	end
 	return str
 end
+
 -- Build the string for a button
 -- Input : Button label, button ID, total number of buttons and if this is a Child device
 local function buildJsonButton(btnNum,btnLab,btnID,btnDur,numBtn,isChild)
@@ -1208,11 +1200,9 @@ local function buildJsonButton(btnNum,btnLab,btnID,btnDur,numBtn,isChild)
 			if (btnNum == 6) or (btnNum == 11) or (btnNum == 16)  or (btnNum == 21) then newRow = true end
 		end
 		cTop = 45 + (pTop * 25)
-		-- V2.1 Fixed 100 px Control tab button width solved in 7.04
 		if (luup.version_major == 7) and (luup.version_minor < 4) then 
 			cWidth = 100 
 		else	
-			-- V2.1 7.05 layout improvements controlling line break
 			if (newRow) then str = str .. '{ "ControlGroup": 1, "ControlType": "line_break" },\n'	end
 			cWidth = 65 * butWidth
 		end
@@ -1238,7 +1228,6 @@ local function buildJsonButton(btnNum,btnLab,btnID,btnDur,numBtn,isChild)
 		cTop = 45 + (pTop * 25)
 		cLeft = 50 + (pLeft * (cWidth + 10))
 	end	
-	-- V2.1 7.05 layout improvements allowing for wider buttons
 	str = str .. '{ "ControlGroup": "1", "ControlType": "button", "top": '..pTop..', "left": '..pLeft..','
 	if (luup.version_major >= 7) then
 		if (luup.version_major >= 7) and (luup.version_minor < 4) then
@@ -1515,6 +1504,53 @@ local function make_D_file(devID,name,prnt_id)
 	end	
 end
 
+-- Create CustomModeConfiguration value for preset House mode support.
+local function Harmony_CreateCustomModeConfiguration(devID, isChild)
+	local maxBtn, id, lab, dur, sid, cmd, prm
+	local retVal = nil
+	local numBtn = 0
+	local buttons = {}
+	if (luup.version_major >= 7) then 
+		maxBtn = HData.MaxButtonUI7 
+		if (not HData.onOpenLuup) and (luup.version_minor < 4) then maxBtn = maxBtn - 5 end
+	else 
+		maxBtn = HData.MaxButtonUI5 
+	end
+	if (isChild == false) then 
+		sid = HData.SID
+		cmd = "/StartActivity"
+		prm = "/newActivityID="
+	else 
+		sid = HData.CHSID 
+		cmd = "/SendDeviceCommand"
+		prm = "/Command="
+	end
+	-- If not new device we can read the variables for the buttons. 
+	for i = 1, maxBtn do
+		if (isChild == false) then
+			id = varGet("ActivityID"..i) or ''
+			lab = varGet("ActivityDesc"..i) or ''
+		else
+			id = varGet("Command"..i,devID,sid) or ''
+			lab = varGet("CommandDesc"..i,devID,sid) or ''
+		end
+		if (id ~= '') and (lab ~= '') then 
+			numBtn = numBtn + 1 
+			buttons[numBtn] = {}
+			buttons[numBtn].ID = id
+			buttons[numBtn].Label = lab
+		end
+	end	
+	for i = 1, #buttons do
+		local lab = buttons[i].Label or 'missing'
+		local val = buttons[i].ID or 'missing'
+		local str = lab .. ";CMD" .. val .. ";" .. sid .. cmd .. prm .. val
+		if (i < #buttons) then str = str .. '|' end
+		retVal = (retVal or "") .. str
+	end	
+	return retVal
+end
+
 -- Update the Static JSON file to update button texts etc
 -- Input: devID = device ID
 function Harmony_UpdateButtons(devID, upgrade)
@@ -1542,6 +1578,12 @@ function Harmony_UpdateButtons(devID, upgrade)
 			if (curname ~= (fname..".json")) then luup.attr_set("device_json", fname..".json",devID) end
 		end
 	end	
+	-- Set preset house mode options
+	if (luup.version_major >= 7) then 
+		local cmc = Harmony_CreateCustomModeConfiguration(devID, false)
+		if (cmc) then varSet("CustomModeConfiguration", cmc, devID, HData.HADSID) end
+	end	
+	
 	-- Force reload for things to get picked up if requested on UI7
 	if (upgrd ~= true) then luup_reload() end
 	return true
@@ -1597,12 +1639,17 @@ function Harmony_UpdateDeviceButtons(devID, upgrade)
 			if (curname ~= (fname..".json")) then luup.attr_set("device_json", fname..".json",devID) end
 		end
 	end	
+	-- Set preset house mode options
+	if (luup.version_major >= 7) then 
+		local cmc = Harmony_CreateCustomModeConfiguration(devID, true)
+		if (cmc) then varSet("CustomModeConfiguration", cmc, devID, HData.HADSID) end
+	end
+	
 	-- Force reload for things to get picked up if requested on UI7
 	if (upgrd ~= true) then luup_reload() end
 	return true
 end
-
-		
+	
 -- Harmony_CreateChildren
 local function Harmony_CreateChildren()
 	log("Harmony_CreateChildren for device ",10)
@@ -1625,7 +1672,7 @@ local function Harmony_CreateChildren()
 		Devices_t.devices = {}
 		retStat = false
 	end	
-	-- V2.2 Failed to get devices from HUB, determine current ones from defined plugins
+	-- Failed to get devices from HUB, determine current ones from defined plugins
 	if (retStat == false) then
 		log("Failed to obtain the current devices from Hub. Hub may be off. Will analyse current Child devices")
 		local altidprfx = 'HAM'..HData.DEVICE..'_'
@@ -1725,8 +1772,8 @@ function Harmony_registerWithAltUI()
 			if luup.is_ready(k) then
 				log("Found ALTUI device "..k.." registering devices.")
 				local arguments = {}
---				arguments["newDeviceType"] = "urn:schemas-rboer-com:device:Harmony"..HData.DEVICE..":1"	
-				arguments["newDeviceType"] = "urn:schemas-rboer-com:device:Harmony:1"	
+				arguments["newDeviceType"] = "urn:schemas-rboer-com:device:Harmony"..HData.DEVICE..":1"	
+--				arguments["newDeviceType"] = "urn:schemas-rboer-com:device:Harmony:1"	
 				arguments["newScriptFile"] = "J_ALTUI_Harmony.js"	
 				arguments["newDeviceDrawFunc"] = "ALTUI_HarmonyDisplays.drawHarmony"	
 				arguments["newStyleFunc"] = ""	
@@ -1736,12 +1783,12 @@ function Harmony_registerWithAltUI()
 				luup.call_action(HData.ALTUI_SID, "RegisterPlugin", arguments, k)
 				-- Child devices
 				arguments["newDeviceDrawFunc"] = "ALTUI_HarmonyDisplays.drawHarmonyDevice"	
---				local childDeviceIDs = varGet("PluginHaveChildren") .. ","
---				for deviceID in childDeviceIDs:gmatch("(%w+),") do
---					arguments["newDeviceType"] = "urn:schemas-rboer-com:device:HarmonyDevice"..HData.DEVICE.."_"..deviceID..":1"	
-					arguments["newDeviceType"] = "urn:schemas-rboer-com:device:HarmonyDevice:1"	
+				local childDeviceIDs = varGet("PluginHaveChildren") .. ","
+				for deviceID in childDeviceIDs:gmatch("(%w+),") do
+					arguments["newDeviceType"] = "urn:schemas-rboer-com:device:HarmonyDevice"..HData.DEVICE.."_"..deviceID..":1"	
+--					arguments["newDeviceType"] = "urn:schemas-rboer-com:device:HarmonyDevice:1"	
 					luup.call_action(HData.ALTUI_SID, "RegisterPlugin", arguments, k)
---				end	
+				end	
 			else
 				log("ALTUI plugin is not yet ready, retry in a bit..")
 				luup.call_delay("Harmony_registerWithAltUI", 10, "", false)
@@ -1784,7 +1831,6 @@ function Harmony_init(lul_device)
 	-- Make sure all (advanced) parameters are there
 	local email = defVar("Email")
 	local pwd = defVar("Password")
-	-- V2.1 configurable time out
 	local commTimeOut = tonumber(defVar("CommTimeOut",5))
 	local syslogInfo = defVar ("Syslog")	-- send to syslog if IP address and Port 'XXX.XX.XX.XXX:YYY' (default port 514)
 	HData.LogLevel = tonumber(defVar ("LogLevel", HData.LogLevel))
@@ -1795,7 +1841,7 @@ function Harmony_init(lul_device)
 	defVar("PluginHaveChildren")
 	defVar("PluginEmbedChildren", "0")
 	defVar("DefaultActivity")
-	-- V2.03, do not reset the values on restart, only default when non existent
+	-- Do not reset the values on restart, only default when non existent
 	defVar("LinkStatus", "--")
 	defVar("LastCommand", "--")
 	defVar("LastCommandTime", "--")
