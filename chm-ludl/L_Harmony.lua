@@ -2,8 +2,11 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.12 20 December 2016
+	V2.13 9 January 2017
 	
+	V2.13 Changes:
+				When polling is configured do not send a start activity command to the Hub when it is the same as the current activity.
+
 	V2.12 Changes:
 				Support for preset house mode settings.
 
@@ -101,7 +104,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.12",
+	Version = "2.13",
 	DEVICE = "",
 	Description = "Harmony Control",
 	HADSID = "urn:micasaverde-com:serviceId:HaDevice1",
@@ -585,7 +588,7 @@ end
 function Harmony_PollCurrentActivity()
 	-- See if user want to repeat polling
 	local pollper = varGet("PollInterval")
-	if ((pollper or "0") ~= "0") then 
+	if (pollper ~= "0") then 
 		luup.call_delay("Harmony_PollCurrentActivity", tonumber(pollper), "", false)
 		-- See if we are not polling too close to start activity. This can give false results
 		if (not GetBusy()) and (os.difftime(os.time(), HData.StartActivityBusy) > 30) then
@@ -859,6 +862,23 @@ function Harmony_StartActivity(actID, hnd, fmt)
 	if (HData.Plugin_Disabled == true) then
 		log("StartActivity : Plugin disabled.",3)
 		return true
+	end
+	-- 2.13, do not repeat sending if activity is already the current.
+	if (varGet("PollInterval") ~= '0') then
+		local curActID = tonumber(varGet("CurrentActivityID"))
+		if (curActID == tonumber(actID)) then
+			local message = "Activity "..actID.." is the same as the current one. Not resending."
+			log("StartActivity : "..message,10)
+			if (hnd == false) then
+				return true
+			else
+				local dataTab = {}
+				dataTab.status = HData.ER 
+				dataTab.message = message
+				dataTab.activity = actID
+				return true, dataTab
+			end
+		end
 	end
 	local cmd = 'start_activity'
 	local message = ''
