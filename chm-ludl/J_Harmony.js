@@ -1,11 +1,14 @@
 //# sourceURL=J_Harmony.js
 // harmony Hub Control UI json for UI5/UI6
 // Written by R.Boer. 
-// V2.7 3 March 2015
+// V2.13-1 20 January 2017
+//
+// V2.13-1 Changes:
+//		The password input now has the HTML input type password so it won't show.
 //
 // V2.7 Changes:
 //		User can disable plugin. Signal status on control panel.
-///
+//
 // V2.5 Changes:
 //		Can define key-press duration for devices.
 //		Layout improvements for native UI and ALTUI.
@@ -411,7 +414,8 @@ function hamhtmlAddPulldownMultiple(di, lb, vr, values) {
 
 function hamhtmlAddInput(di, lb, si, vr, sid) {
 	val = (typeof df != 'undefined') ? df : hamVarGet(di,vr,sid);
-	var html = '<tr><td>'+lb+'</td><td><input type="text" size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'" '+
+	var typ = (vr.toLowerCase() == 'password') ? 'type="password"' : 'type="text"';
+	var html = '<tr><td>'+lb+'</td><td><input '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'" '+
 		'onchange="hamVarSet('+di+',\''+vr+'\' , this.value);"></td></tr>';
 	return html;
 }

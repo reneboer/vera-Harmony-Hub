@@ -1,7 +1,11 @@
 //# sourceURL=J_Harmony_UI7.js
 // harmony Hub Control UI for UI7
 // Written by R.Boer. 
-// V2.7 3 March 2016
+// V2.13-1 20 January 2017
+//
+// V2.13-1 Changes:
+//		The password input now has the HTML input type password so it won't show.
+// 		Some hints on poll frequency settings.
 //
 // V2.7 Changes:
 //		User can disable plugin. Signal status on control panel.
@@ -62,8 +66,8 @@ var Harmony = (function (api) {
         try {
 			var deviceID = api.getCpanelDeviceId();
 			var deviceObj = api.getDeviceObject(deviceID);
-			var timeOuts = [{'value':'2','label':'2 Sec'},{'value':'5','label':'5 Sec (default)'},{'value':'10','label':'10 Sec'},{'value':'30','label':'30 Sec'},{'value':'60','label':'60 Sec'}];
-			var timePolls = [{'value':'0','label':'No Polling'},{'value':'5','label':'5 Sec'},{'value':'10','label':'10 Sec'},{'value':'15','label':'15 Sec'},{'value':'20','label':'20 Sec'},{'value':'30','label':'30 Sec'},{'value':'45','label':'45 Sec'},{'value':'60','label':'60 Sec'},{'value':'90','label':'90 Sec'},{'value':'120','label':'120 Sec'}];
+			var timeOuts = [{'value':'2','label':'2 Sec'},{'value':'5','label':'5 Sec (default)'},{'value':'10','label':'10 Sec'},{'value':'30','label':'30 Sec (Pi recommended)'},{'value':'60','label':'60 Sec'}];
+			var timePolls = [{'value':'0','label':'No Polling'},{'value':'5','label':'5 Sec (not recommended)'},{'value':'10','label':'10 Sec (not recommended)'},{'value':'15','label':'15 Sec'},{'value':'20','label':'20 Sec'},{'value':'30','label':'30 Sec'},{'value':'45','label':'45 Sec'},{'value':'60','label':'60 Sec'},{'value':'90','label':'90 Sec'},{'value':'120','label':'120 Sec'}];
 			var timeAck = [{'value':'0','label':'None'},{'value':'1','label':'1 Sec'},{'value':'2','label':'2 Sec'},{'value':'3','label':'3 Sec'}];
 			var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
 			var logLevel = [{'value':'1','label':'Error'},{'value':'2','label':'Warning'},{'value':'8','label':'Info'},{'value':'10','label':'Debug'}];
@@ -478,8 +482,9 @@ var Harmony = (function (api) {
 	function htmlAddMapping(di, lb1, vr1, values, lb2, vr2, sid) {
 		try {
 			var selVal = varGet(di, vr1, sid);
+			var wdth = (typeof ALTUI_revision != 'undefined') ? 'style="width:160px;"' : '';  // Use on ALTUI
 			var html = '<div class="clearfix labelInputContainer">'+
-				'<div class="pull-left inputLabel" style="width:120px;">'+lb1+'</div>'+
+				'<div class="pull-left inputLabel" '+wdth+'>'+lb1+'</div>'+
 				'<div class="pull-left customSelectBoxContainer" style="width:160px;">'+
 				'<select id="hamID_'+vr1+di+'" class="customSelectBox" style="width:160px;">';
 			for(var i=0;i<values.length;i++){
@@ -561,12 +566,28 @@ var Harmony = (function (api) {
 	// Add a standard input for a plug-in variable.
 	function htmlAddInput(di, lb, si, vr, sid, df) {
 		var val = (typeof df != 'undefined') ? df : varGet(di,vr,sid);
+		var typ = (vr.toLowerCase() == 'password') ? 'type="password"' : 'type="text"';
 		var html = '<div class="clearfix labelInputContainer">'+
 					'<div class="pull-left inputLabel" style="width:280px;">'+lb+'</div>'+
 					'<div class="pull-left">'+
-						'<input class="customInput" size="'+si+'" id="hamID_'+vr+di+'" type="text" value="'+val+'">'+
+						'<input class="customInput" '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'">'+
 					'</div>'+
 				   '</div>';
+		if (vr.toLowerCase() == 'password') {
+			html += '<div class="clearfix labelInputContainer">'+
+					'<div class="pull-left inputLabel" style="width:280px;">&nbsp; </div>'+
+					'<div class="pull-left">'+
+						'<input class="customCheckbox" type="checkbox" id="hamID_'+vr+di+'Checkbox">'+
+						'<label class="labelForCustomCheckbox" for="hamID_'+vr+di+'Checkbox">Show Password</label>'+
+					'</div>'+
+				   '</div>';
+			html += '<script type="text/javascript">'+
+					'$("#hamID_'+vr+di+'Checkbox").on("change", function() {'+
+					' var typ = (this.checked) ? "text" : "password" ; '+
+					' $("#hamID_'+vr+di+'").prop("type", typ);'+
+					'});'+
+					'</script>';
+		}
 		return html;
 	}
 	// Add a Save Settings button
