@@ -2,8 +2,11 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.13 9 January 2017
+	V2.14 1 February 2017
 	
+	V2.14 Changes:
+				Minor fix on create child devices when no response from the Harmony Hub device.
+
 	V2.13 Changes:
 				When polling is configured do not send a start activity command to the Hub when it is the same as the current activity.
 
@@ -104,7 +107,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.13",
+	Version = "2.14",
 	DEVICE = "",
 	Description = "Harmony Control",
 	HADSID = "urn:micasaverde-com:serviceId:HaDevice1",
@@ -1673,7 +1676,7 @@ end
 -- Harmony_CreateChildren
 local function Harmony_CreateChildren()
 	log("Harmony_CreateChildren for device ",10)
-	local childDeviceIDs = defVar("PluginHaveChildren")
+	local childDeviceIDs = varGet("PluginHaveChildren")
 	-- See if we have obsolete child xml or json files. If so remove them
 	if (HData.Plugin_Disabled == false) then removeObsoleteChildDeviceFiles(childDeviceIDs) end
 	if (childDeviceIDs == '') then 
@@ -1686,7 +1689,7 @@ local function Harmony_CreateChildren()
 	local retStat, Devices_t 
 	if (HData.Plugin_Disabled == false) then 
 		retStat, Devices_t = Harmony_GetConfig('list_devices', "", HData.JS)
-		if (#Devices_t.devices == 0) then log("No devices returned from Harmony Hub.",10) end
+		if retStat and (#Devices_t.devices == 0) then log("No devices returned from Harmony Hub.",10) end
 	else
 		Devices_t = {}
 		Devices_t.devices = {}
