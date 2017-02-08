@@ -2,8 +2,12 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.14 1 February 2017
+	V2.15 7 February 2017
 	
+	V2.15 Changes:
+				Option to wait on Hub to fully complete the start of an activity or not.
+				Fix for error message on starting an activity with more than 9 steps.
+				
 	V2.14 Changes:
 				Minor fix on create child devices when no response from the Harmony Hub device.
 
@@ -107,7 +111,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.14",
+	Version = "2.15",
 	DEVICE = "",
 	Description = "Harmony Control",
 	HADSID = "urn:micasaverde-com:serviceId:HaDevice1",
@@ -340,7 +344,7 @@ end
 -- Open connection socket to Harmony
 -- Assuming all inputs are there, no additional checking
 -- Return token connected to.
-local function HarmonyAPI(ipAddress, email, pwd, commTimeOut)
+local function HarmonyAPI(ipAddress, email, pwd, commTimeOut, wait)
 	local CommunicationPort = 5222
 	local ERR_CD = { OK = "200", ERR = "503" }
 	local ERR_MSG = { OK = "OK", ERR = "Unknown Harmony response" }
@@ -356,6 +360,8 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut)
 	local ipa = ipAddress
 	local email = email
 	local pwd = pwd
+	--V2.15 option to wait on Hub to fully complete the start of an activity or not.
+	local WaitOnActionStartComplete = wait
 	-- V2.1 Configurable time out
 	local commTimeOut = (commTimeOut or 5)
 	local isBusy = false
@@ -466,6 +472,8 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut)
 				isBusy = false
 				return ERR_CD.OK, ERR_MSG.OK, CMD_DATA.OK 
 			end
+			-- V2.15 set last comand time
+			HData.LastCommandTime = starttime
 			-- V2.1 suggestion, rest of data may not come back as quickly especially for StartActivity, so minimum timeout of 30 secs in 
 --			if (msgcnt == 1) then sock:settimeout(30) end
 			repeat
@@ -486,11 +494,13 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut)
 					if (cmd == 'startactivity') then 
 						if (cmdResp ~= CMD_DATA.OK) then
 							local dmCnt, tmCnt = 0,0
-							local doneMsg = cmdResp:match("done=%d")
-							local totMsg = cmdResp:match(":total=%d")
-							if totMsg then tmCnt = tonumber(totMsg:match("%d")) end
-							if doneMsg then dmCnt = tonumber(doneMsg:match("%d")) end
-							if (dmCnt == tmCnt) then done = true end
+							-- V2.15, allow for two digit (more than 9) messages to be returned.
+							local doneMsg = cmdResp:match("done=%d+")
+							local totMsg = cmdResp:match(":total=%d+")
+							if totMsg then tmCnt = tonumber(totMsg:match("%d+")) end
+							if doneMsg then dmCnt = tonumber(doneMsg:match("%d+")) end
+							-- V2.15 new option to not wait on activity fully started.
+							if (not WaitOnActionStartComplete) or (dmCnt == tmCnt) then done = true end
 						end
 					else	
 						done = true
@@ -503,7 +513,8 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut)
 					if (cmd == 'startactivity') then 
 						cmdResp = msgResp:match(PAT_DATA.PAT) or PAT_DATA.DEF
 						cmdResp = cmdResp:sub(PAT_DATA.ST,PAT_DATA.EN)
-						if (cmdResp == "activityId="..id) then done = true end
+						-- V2.15 new option to not wait on activity fully started.
+						if (not WaitOnActionStartComplete) or (cmdResp == "activityId="..id) then done = true end
 					end
 					starttime = os.time()
 				else
@@ -594,7 +605,7 @@ function Harmony_PollCurrentActivity()
 	if (pollper ~= "0") then 
 		luup.call_delay("Harmony_PollCurrentActivity", tonumber(pollper), "", false)
 		-- See if we are not polling too close to start activity. This can give false results
-		if (not GetBusy()) and (os.difftime(os.time(), HData.StartActivityBusy) > 30) then
+		if (not GetBusy()) and (os.difftime(os.time(), HData.StartActivityBusy) > 60) then
 			local stat, actID = Harmony_GetCurrentActivtyID()
 			if (stat == true) then 
 				log('PollCurrentActivity found activity ID : ' .. actID,10) 
@@ -1860,6 +1871,8 @@ function Harmony_init(lul_device)
 	defVar("HTTPServer", 0)
 	defVar("PollInterval",0)
 	defVar("OkInterval",3)
+	-- V2.15, option to wait on completion of start activity
+	local wait = (defVar("WaitOnActivityStartComplete", "1") == "1")
 	defVar("AuthorizationToken")
 	defVar("PluginHaveChildren")
 	defVar("PluginEmbedChildren", "0")
@@ -2010,7 +2023,7 @@ function Harmony_init(lul_device)
 		return false, "Configure IP Address, email and password.", HData.Description
 	end
 	log("Using Harmony Hub: IP address " .. ipAddress, 3)
-	Harmony = HarmonyAPI(ipAddress, email, pwd, commTimeOut)
+	Harmony = HarmonyAPI(ipAddress, email, pwd, commTimeOut, wait)
 	if (Harmony == nil) then 
 		success = false 
 	else

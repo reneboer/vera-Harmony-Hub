@@ -1,7 +1,10 @@
 //# sourceURL=J_Harmony_UI7.js
 // harmony Hub Control UI for UI7
 // Written by R.Boer. 
-// V2.13-1 20 January 2017
+// V2.15 7 February 2017
+//
+// V2.15 Changes:
+//		New settings option to wait on Hub to fully complete the start of an activity or not.
 //
 // V2.13-1 Changes:
 //		The password input now has the HTML input type password so it won't show.
@@ -92,6 +95,7 @@ var Harmony = (function (api) {
 				htmlAddPulldown(deviceID, 'Current Activity Poll Interval', 'PollInterval', timePolls)+
 				htmlAddPulldown(deviceID, 'Ok Acknowledge Interval', 'OkInterval', timeAck)+
 				htmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel)+
+				htmlAddPulldown(deviceID, 'Wait on Activity start complete', 'WaitOnActivityStartComplete', yesNo)+
 				htmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo)+
 				htmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo)+
 				htmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel)+
@@ -295,6 +299,7 @@ var Harmony = (function (api) {
 		varSet(deviceID,'PollInterval',htmlGetElemVal(deviceID, 'PollInterval'));
 		varSet(deviceID,'OkInterval',htmlGetElemVal(deviceID, 'OkInterval'));
 		varSet(deviceID,'DefaultActivity',htmlGetPulldownSelection(deviceID, 'DefaultActivity'));
+		varSet(deviceID,'WaitOnActivityStartComplete',htmlGetPulldownSelection(deviceID, 'WaitOnActivityStartComplete'));
 		varSet(deviceID,'HTTPServer',htmlGetPulldownSelection(deviceID, 'HTTPServer'));
 		varSet(deviceID,'RemoteImages',htmlGetPulldownSelection(deviceID, 'RemoteImages'));
 		varSet(deviceID,'LogLevel',htmlGetPulldownSelection(deviceID, 'LogLevel'));

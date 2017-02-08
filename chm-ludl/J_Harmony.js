@@ -1,7 +1,10 @@
 //# sourceURL=J_Harmony.js
 // harmony Hub Control UI json for UI5/UI6
 // Written by R.Boer. 
-// V2.13-1 20 January 2017
+// V2.15 7 February 2017
+//
+// V2.15 Changes:
+//		New settings option to wait on Hub to fully complete the start of an activity or not.
 //
 // V2.13-1 Changes:
 //		The password input now has the HTML input type password so it won't show.
@@ -63,13 +66,14 @@ function hamSettings(deviceID) {
 		'<td><input type="text" id="device_'+deviceID+'_IP" size="30" value="'+((deviceObj.ip)?deviceObj.ip:'')+'" onChange="update_device('+deviceID+',this.value,\'jsonp.ud.devices['+devicePos+'].ip\');"></td></tr>'+
 		hamhtmlAddInput(deviceID, 'Harmony Hub email', 30, 'Email')+
 		hamhtmlAddInput(deviceID, 'Harmony Hub Password', 20, 'Password')+
-		hamhtmlAddPulldown(deviceID, 'Harmony Hub communication time out', 'CommTimeOut', timeOuts,true)+
+		hamhtmlAddPulldown(deviceID, 'Harmony Hub communication time out', 'CommTimeOut', timeOuts, true)+
 		hamhtmlAddPulldown(deviceID, 'Current Activity Poll Interval', 'PollInterval', timePolls, true)+
 		hamhtmlAddPulldown(deviceID, 'Ok Acknowledge Interval', 'OkInterval', timeAck, true)+
-		hamhtmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel,true)+
-		hamhtmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo,true)+
-		hamhtmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo,true)+
-		hamhtmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel,true)+
+		hamhtmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel, true)+
+		hamhtmlAddPulldown(deviceID, 'Wait on Activity start complete', 'WaitOnActivityStartComplete', yesNo, true)+
+		hamhtmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo, true)+
+		hamhtmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo, true)+
+		hamhtmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel, true)+
 		hamhtmlAddInput(deviceID, 'Syslog server IP Address:Port', 30, 'Syslog');
 	}	
 	html += '</tbody></table>';
