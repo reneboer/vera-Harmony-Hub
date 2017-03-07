@@ -2,55 +2,47 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.15 7 February 2017
+	V2.17 6 March 2017
 	
+	V2.17 Changes:
+				Native ALTUI support.
+	V2.16 Changes:
+				Use luup.attr_get rather than accesing luup.devices directly where possible.
 	V2.15 Changes:
 				Option to wait on Hub to fully complete the start of an activity or not.
 				Fix for error message on starting an activity with more than 9 steps.
-				
 	V2.14 Changes:
 				Minor fix on create child devices when no response from the Harmony Hub device.
-
 	V2.13 Changes:
 				When polling is configured do not send a start activity command to the Hub when it is the same as the current activity.
-
 	V2.12 Changes:
 				Support for preset house mode settings.
-
 	V2.11 Changes:
 				Fix for repeats of startActivity with same value.
-
 	V2.10 Changes:
 				Fix for support on activities other then 8 digits long.
-
 	V2.9 Changes:
 				Child devices no longer show the delete button when newly created.
 				When the SetTarget newTarget is current Target then no action. Before newTarget=1 would always change to default activity.
-
 	V2.8 Changes:
 				Child devices no longer show the delete button.
 				Extra check on length of returned activity ID. Seems scambled after a failed poll (openLuup issue only?)
-
 	V2.7 Changes: 
 				Fix for UI5 and other systems not having dkjson lib installed.
 				Fix for possible double scene triggers.
-				Support for disable attribute so you can disable the plugin without deinstallation. 
-				
+				Support for disable attribute so you can disable the plugin without deinstallation.				
 	V2.6.1 Changes:
 				Fix for openLuup support and proper definition of parent and child Device and Implementation files.
-
 	V2.6 Changes:
 				openLuup support
 				handle harmony Hub response when new and current activty are the some one.
  				Minor enhancements for ALTUI drawing after first install
-
 	V2.5 Changes:
 				Can define key-press duration for devices.
 				Layout improvements for native UI and ALTUI.
  				Changed poll and acknowledge settings to drop down selections.
 				Proper JSON returns from LUA.
 				Fixed issue with multiple notifications.
-
 	V2.4 Changes:
 				AppMemoryUsed updated once per ten minutes and in debug mode only reducing CPU.
 				Set functions to local.
@@ -106,12 +98,11 @@ if (type(json) == "string") then
 	luup.log("Harmony warning dkjson missing, falling back to harmony_json", 2)
 	json = require("harmony_json")
 end
---local dkjson = require('harmony_json')
 
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.15",
+	Version = "2.17",
 	DEVICE = "",
 	Description = "Harmony Control",
 	HADSID = "urn:micasaverde-com:serviceId:HaDevice1",
@@ -121,7 +112,7 @@ local HData = { -- Data used by Harmony Plugin
 	ALTUI_SID = "urn:upnp-org:serviceId:altui1",
 	RemoteIconURL = "http://www.reneboer.demon.nl/veraimg/",
 	UI7IconURL = "",
-	UI5IconURL = "icons\/",
+	UI5IconURL = "icons\\/",
 	f_path = '/etc/cmh-ludl/',
 	onOpenLuup = false,
 	syslog,
@@ -1592,7 +1583,8 @@ function Harmony_UpdateButtons(devID, upgrade)
 	local upgrd
 	if (upgrade ~= nil) then upgrd = upgrade else upgrd = false end 
 	-- See if we have a device specific definition yet
-	local dname = string.match(luup.devices[devID].device_type, ":Harmony%d+:")
+--	local dname = string.match(luup.devices[devID].device_type, ":Harmony%d+:")
+	local dname = string.match(luup.attr_get("device_type", devID), ":Harmony%d+:")
 	local dnum
 	if (dname ~= nil) then dnum = string.match(dname, "%d+") end
 	if (dnum ~= nil) then 
@@ -1655,7 +1647,8 @@ function Harmony_UpdateDeviceButtons(devID, upgrade)
 	end
 	
 	log('Updating buttons of device# ' .. devID .. ' for Harmony Device ' .. deviceID)
-	local dname = string.match(luup.devices[devID].device_type, ":HarmonyDevice"..prnt_id.."_%d+:")
+--	local dname = string.match(luup.devices[devID].device_type, ":HarmonyDevice"..prnt_id.."_%d+:")
+	local dname = string.match(luup.attr_get("device_type", devID), ":HarmonyDevice"..prnt_id.."_%d+:")
 	local dnum, tmp
 	if (dname ~= nil) then tmp, dnum = string.match(dname, "(%d+)_(%d+)") end
 	if (dnum ~= nil) then 
@@ -1754,7 +1747,8 @@ local function Harmony_CreateChildren()
 				make_D_file(deviceID,'HarmonyDevice',HData.DEVICE)
 				make_JSON_file(deviceID,'D_HarmonyDevice',false,true,nil,HData.DEVICE)
 			end
-			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.CHSID..",DeviceID=".. deviceID.."\n"..HData.CHSID..",HubName="..luup.devices[HData.DEVICE].description
+--			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.CHSID..",DeviceID=".. deviceID.."\n"..HData.CHSID..",HubName="..luup.devices[HData.DEVICE].description
+			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.CHSID..",DeviceID=".. deviceID.."\n"..HData.CHSID..",HubName="..luup.attr_get("name", HData.DEVICE)
 			local name = "HRM: " .. string.gsub(desc, "%s%(.+%)", "")
 			log("Child device id " .. altid .. " (" .. name .. "), number " .. deviceID,10)
 			luup.chdev.append(
@@ -1799,6 +1793,7 @@ function Harmony_Setup()
 	return true
 end
 
+--[[
 function Harmony_registerWithAltUI()
 	-- Register with ALTUI once it is ready
 	for k, v in pairs(luup.devices) do
@@ -1831,6 +1826,7 @@ function Harmony_registerWithAltUI()
 		end
 	end
 end
+]]
 
 -- Initialize our device
 function Harmony_init(lul_device)
@@ -1851,7 +1847,7 @@ function Harmony_init(lul_device)
 		-- Still create any child devices so we do not loose configurations.
 		Harmony_CreateChildren()
 		-- Still register with ALTUI for proper drawing
-		Harmony_registerWithAltUI()
+--		Harmony_registerWithAltUI()
 		varSet("LinkStatus", "Plug-in disabled")
 		varSet("LastCommand", "--")
 		varSet("LastCommandTime", "--")
@@ -1889,7 +1885,8 @@ function Harmony_init(lul_device)
 	if (syslogInfo ~= '') then
 		log('Starting UDP syslog service...',7) 
 		local err
-		local syslogTag = luup.devices[HData.DEVICE].description or HData.Description 
+--		local syslogTag = luup.devices[HData.DEVICE].description or HData.Description 
+		local syslogTag = luup.attr_get("name",HData.DEVICE) or HData.Description 
 		HData.syslog, err = syslog_server (syslogInfo, syslogTag)
 		if (not HData.syslog) then log('UDP syslog service error: '..err,2) end
 	else 
@@ -2009,11 +2006,12 @@ function Harmony_init(lul_device)
 	end
 	-- Call to register with ALTUI
 --	luup.call_delay("Harmony_registerWithAltUI", 10, "", false)
-	Harmony_registerWithAltUI()
+--	Harmony_registerWithAltUI()
 	
 	-- Check that we have to parameters to get started
 	local success = true
-	local ipa = luup.devices[HData.DEVICE].ip
+--	local ipa = luup.devices[HData.DEVICE].ip
+	local ipa = luup.attr_get("ip", HData.DEVICE)
 	local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
 	-- Some cases IP gets stuck in variable and no in attribute (openLuup or ALTUI bug)
 	if (ipAddress == nil) or (email == '') or (pwd == '') then

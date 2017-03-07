@@ -1,7 +1,10 @@
 //# sourceURL=J_Harmony_UI7.js
 // harmony Hub Control UI for UI7
 // Written by R.Boer. 
-// V2.15 7 February 2017
+// V2.16 22 February 2017
+//
+// V2.16 Changes:
+//		Changed call to request data from Vera Handlers.
 //
 // V2.15 Changes:
 //		New settings option to wait on Hub to fully complete the start of an activity or not.
@@ -609,7 +612,7 @@ var Harmony = (function (api) {
 			try {
 				api.ui.showStartupModalLoading(); // version v1.7.437 and up
 			} catch (e) {
-				api.ui.startupShowModalLoading(); // Prior versions.
+				myInterface.showStartupModalLoading(); // For ALTUI support.
 			}
 		} else {
 			try {
@@ -625,12 +628,12 @@ var Harmony = (function (api) {
 		var devnum = (typeof prnt_id != 'undefined') ? prnt_id : device;
 		var tmstmp = new Date().getTime(); // To avoid caching issues, mainly IE.
 		try {
-			var requestURL = api.getCommandURL(); 
+			var requestURL = api.getDataRequestURL()+'?'; 
 		} catch (e) {
-			var requestURL = command_url;
+			var requestURL = data_request_url;
 		}
 		(function() {
-			$.getJSON(requestURL+'/data_request', {
+			$.getJSON(requestURL, {
 				id: 'lr_'+what+devnum,
 				serviceId: sid,
 				DeviceNum: device,

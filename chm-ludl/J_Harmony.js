@@ -1,7 +1,10 @@
 //# sourceURL=J_Harmony.js
 // harmony Hub Control UI json for UI5/UI6
 // Written by R.Boer. 
-// V2.15 7 February 2017
+// V2.16 22 February 2017
+//
+// V2.16 Changes:
+//		Changed call to request data from Vera Handlers.
 //
 // V2.15 Changes:
 //		New settings option to wait on Hub to fully complete the start of an activity or not.
@@ -463,7 +466,7 @@ function hamGetInfo(device, sid, what, devid, func, prnt_id) {
 	var result;
 	var devnum = (typeof prnt_id != 'undefined') ? prnt_id : device;
 	var tmstmp = new Date().getTime(); // To avoid caching issues, mainly IE.
-	new Ajax.Request(command_url+'/data_request', { 
+	new Ajax.Request(data_request_url, { 
 			method: 'get', 
 			parameters: { 
 				id: 'lr_'+what+devnum,
