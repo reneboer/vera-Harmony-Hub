@@ -1,7 +1,10 @@
 //# sourceURL=J_Harmony_UI7.js
 // harmony Hub Control UI for UI7
 // Written by R.Boer. 
-// V2.16 22 February 2017
+// V2.19 3 October 2017
+//
+// V2.19 Changes:
+//		IP Address is now stored in normal variable, no longer in device IP attribute.
 //
 // V2.16 Changes:
 //		Changed call to request data from Vera Handlers.
@@ -91,7 +94,8 @@ var Harmony = (function (api) {
 			if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
 				html += '<br>Plugin is disabled in Attributes.';
 			} else {	
-				html +=	htmlAddInput(deviceID, 'Harmony Hub IP Address', 20, 'IPAddress', HAM_SID, ip) + 
+//				html +=	htmlAddInput(deviceID, 'Harmony Hub IP Address', 20, 'IPAddress', HAM_SID, ip) + 
+				html +=	htmlAddInput(deviceID, 'Harmony Hub IP Address', 20, 'HubIPAddress') + 
 				htmlAddInput(deviceID, 'Harmony Hub Email', 30, 'Email') + 
 				htmlAddInput(deviceID, 'Harmony Hub Password', 20, 'Password')+
 				htmlAddPulldown(deviceID, 'Harmony Hub communication time out', 'CommTimeOut', timeOuts)+
@@ -296,6 +300,7 @@ var Harmony = (function (api) {
 		// Save variable values so we can access them in LUA without user needing to save
 		showBusy(true);
 		var devicePos = api.getDeviceIndex(deviceID);
+		varSet(deviceID,'HubIPAddress',htmlGetElemVal(deviceID, 'HubIPAddress'));
 		varSet(deviceID,'Email',htmlGetElemVal(deviceID, 'Email'));
 		varSet(deviceID,'Password',htmlGetElemVal(deviceID, 'Password'));
 		varSet(deviceID,'CommTimeOut',htmlGetPulldownSelection(deviceID, 'CommTimeOut'));
@@ -307,21 +312,19 @@ var Harmony = (function (api) {
 		varSet(deviceID,'RemoteImages',htmlGetPulldownSelection(deviceID, 'RemoteImages'));
 		varSet(deviceID,'LogLevel',htmlGetPulldownSelection(deviceID, 'LogLevel'));
 		varSet(deviceID,'Syslog',htmlGetElemVal(deviceID, 'Syslog'));
-		var ipa = htmlGetElemVal(deviceID, 'IPAddress');
-		if (Utils.isValidIp(ipa)) {
-			api.setDeviceAttribute(deviceID, 'ip', ipa);
-		}
+//		var ipa = htmlGetElemVal(deviceID, 'IPAddress');
+//		if (Utils.isValidIp(ipa)) {
+//			api.setDeviceAttribute(deviceID, 'ip', ipa);
+//		}
 		application.sendCommandSaveUserData(true);
 		doReload(deviceID);
 		setTimeout(function() {
 			showBusy(false);
 			try {
-//				myInterface.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0);
 				api.ui.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0);
 			}
 			catch (e) {
 				myInterface.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0); // ALTUI
-//				Utils.logError('Harmony: UpdateSettings(): ' + e);
 			}
 		}, 3000);	
 	}

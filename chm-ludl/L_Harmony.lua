@@ -2,8 +2,13 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.17 6 March 2017
+	V2.19 3 October 2017
 	
+	V2.19 Changes:
+				IP Address is now stored in normal variable, no longer in device IP attribute.
+				On upgrade the value from IP attribute is used as default.
+	V2.18 Changes:
+				Make sure Duration value does not get written as empty string as Windows App does not like that.
 	V2.17 Changes:
 				Native ALTUI support.
 	V2.16 Changes:
@@ -102,7 +107,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.17",
+	Version = "2.19",
 	DEVICE = "",
 	Description = "Harmony Control",
 	HADSID = "urn:micasaverde-com:serviceId:HaDevice1",
@@ -1266,6 +1271,7 @@ local function buildJsonButton(btnNum,btnLab,btnID,btnDur,numBtn,isChild)
 		str = str .. '"Display": { "Service": "'..HData.SID..'", "Variable": "CurrentActivityID", "Value": "'..btnID..'", "Top": '..cTop..', "Left": '..cLeft..', "Width": '..cWidth..', "Height": 20 },\n'
 		str = str .. '"Command": { "Service": "'..HData.SID..'", "Action": "StartActivity", "Parameters": [{ "Name": "newActivityID", "Value": "'..btnID..'" }] },\n'
 	else
+		if btnDur == '' then btnDur = 0 end
 		str = str .. '"Display": { "Service": "'..HData.CHSID..'", "Variable": "LastDeviceCommand", "Value": "'..btnID..'", "Top": '..cTop..', "Left": '..cLeft..', "Width": '..cWidth..', "Height": 20 },\n'
 		str = str .. '"Command": { "Service": "'..HData.CHSID..'", "Action": "SendDeviceCommand", "Parameters": [{ "Name": "Command", "Value": "'..btnID..'"},{  "Name": "Duration", "Value": "'..btnDur..'" }] },\n'
 	end
@@ -1911,6 +1917,8 @@ function Harmony_init(lul_device)
 		end	
 	end
 	if (forcenewjson == true) then
+		local ipa = luup.attr_get("ip", HData.DEVICE)
+		defVar("HubIPAddress", ipa)
 		-- Bump loglevel to monitor rewrite
 		luup.log("Force rewrite of JSON files for correct Vera software version and configuration.")
 		-- We may have some obsolete files, remove them.
@@ -2011,7 +2019,8 @@ function Harmony_init(lul_device)
 	-- Check that we have to parameters to get started
 	local success = true
 --	local ipa = luup.devices[HData.DEVICE].ip
-	local ipa = luup.attr_get("ip", HData.DEVICE)
+--	local ipa = luup.attr_get("ip", HData.DEVICE)
+	local ipa =	defVar("HubIPAddress","")
 	local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
 	-- Some cases IP gets stuck in variable and no in attribute (openLuup or ALTUI bug)
 	if (ipAddress == nil) or (email == '') or (pwd == '') then

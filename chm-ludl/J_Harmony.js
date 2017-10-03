@@ -1,7 +1,10 @@
 //# sourceURL=J_Harmony.js
 // harmony Hub Control UI json for UI5/UI6
 // Written by R.Boer. 
-// V2.16 22 February 2017
+// V2.19 3 October 2017
+//
+// V2.19 Changes:
+//		IP Address is now stored in normal variable, no longer in device IP attribute.
 //
 // V2.16 Changes:
 //		Changed call to request data from Vera Handlers.
@@ -65,8 +68,9 @@ function hamSettings(deviceID) {
 	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
 		html += '<tr><td colspan="2">&nbsp;</td></tr><tr><td colspan="2">Plugin is disabled in Attributes.</td></tr>';
 	} else {		
-		html += '<tr><td width="250">Harmony Hub IP Address</td>'+
-		'<td><input type="text" id="device_'+deviceID+'_IP" size="30" value="'+((deviceObj.ip)?deviceObj.ip:'')+'" onChange="update_device('+deviceID+',this.value,\'jsonp.ud.devices['+devicePos+'].ip\');"></td></tr>'+
+//		html += '<tr><td width="250">Harmony Hub IP Address</td>'+
+//		'<td><input type="text" id="device_'+deviceID+'_IP" size="30" value="'+((deviceObj.ip)?deviceObj.ip:'')+'" onChange="update_device('+deviceID+',this.value,\'jsonp.ud.devices['+devicePos+'].ip\');"></td></tr>'+
+		html+= hamhtmlAddInput(deviceID, 'Harmony Hub IP Address', 30, 'HubIPAddress')+
 		hamhtmlAddInput(deviceID, 'Harmony Hub email', 30, 'Email')+
 		hamhtmlAddInput(deviceID, 'Harmony Hub Password', 20, 'Password')+
 		hamhtmlAddPulldown(deviceID, 'Harmony Hub communication time out', 'CommTimeOut', timeOuts, true)+
