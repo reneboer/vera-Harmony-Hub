@@ -1,7 +1,10 @@
 //# sourceURL=J_Harmony.js
 // harmony Hub Control UI json for UI5/UI6
 // Written by R.Boer. 
-// V2.19 3 October 2017
+// V2.20 16 March 2018
+//
+// V2.20 Changes:
+//		Removed syslog support
 //
 // V2.19 Changes:
 //		IP Address is now stored in normal variable, no longer in device IP attribute.
@@ -54,7 +57,7 @@ function hamSettings(deviceID) {
 	var timeOuts = [{'value':'2','label':'2 Sec'},{'value':'5','label':'5 Sec (default)'},{'value':'10','label':'10 Sec'},{'value':'30','label':'30 Sec'}];
 	var timePolls = [{'value':'0','label':'No Polling'},{'value':'5','label':'5 Sec'},{'value':'10','label':'10 Sec'},{'value':'15','label':'15 Sec'},{'value':'20','label':'20 Sec'},{'value':'30','label':'30 Sec'},{'value':'45','label':'45 Sec'},{'value':'60','label':'60 Sec'},{'value':'90','label':'90 Sec'},{'value':'120','label':'120 Sec'}];
 	var timeAck = [{'value':'0','label':'None'},{'value':'1','label':'1 Sec'},{'value':'2','label':'2 Sec'},{'value':'3','label':'3 Sec'}];
-	var logLevel = [{'value':'1','label':'Error'},{'value':'2','label':'Warning'},{'value':'8','label':'Info'},{'value':'10','label':'Debug'}];
+	var logLevel = [{'value':'1','label':'Error'},{'value':'2','label':'Warning'},{'value':'8','label':'Info'},{'value':'11','label':'Debug'}];
 	var actSel = [{ 'value':'','label':'None'}];
 	for (i=1; i<=HAM_MAXBUTTONS; i++) {
 		var actID = hamVarGet(deviceID,'ActivityID'+i);
@@ -80,8 +83,7 @@ function hamSettings(deviceID) {
 		hamhtmlAddPulldown(deviceID, 'Wait on Activity start complete', 'WaitOnActivityStartComplete', yesNo, true)+
 		hamhtmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo, true)+
 		hamhtmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo, true)+
-		hamhtmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel, true)+
-		hamhtmlAddInput(deviceID, 'Syslog server IP Address:Port', 30, 'Syslog');
+		hamhtmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel, true);
 	}	
 	html += '</tbody></table>';
     set_panel_html(html);

@@ -2,8 +2,13 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.19 3 October 2017
+	V2.20 16 March 2018
 	
+	V2.20 Changes:
+				Support for Home poll only option.
+				Updated for my now standard Var and Log modules.
+				Small optimizations.
+				Removed special handling for UI 7.0.4 and older UI7 versions.
 	V2.19 Changes:
 				IP Address is now stored in normal variable, no longer in device IP attribute.
 				On upgrade the value from IP attribute is used as default.
@@ -98,6 +103,7 @@ Control the harmony Hub
 --]==]
 
 local socketLib = require("socket")
+local lfs = require("lfs")
 local json = require("dkjson")
 if (type(json) == "string") then
 	luup.log("Harmony warning dkjson missing, falling back to harmony_json", 2)
@@ -107,25 +113,24 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.19",
+	Version = "2.20",
 	DEVICE = "",
 	Description = "Harmony Control",
-	HADSID = "urn:micasaverde-com:serviceId:HaDevice1",
-	SWSID = "urn:upnp-org:serviceId:SwitchPower1",
-	SID = "urn:rboer-com:serviceId:Harmony1",
-	CHSID = "urn:rboer-com:serviceId:HarmonyDevice1",
-	ALTUI_SID = "urn:upnp-org:serviceId:altui1",
+	SIDS = {
+		MODULE = "urn:rboer-com:serviceId:Harmony1",
+		CHILD = "urn:rboer-com:serviceId:HarmonyDevice1",
+--		ALTUI = "urn:upnp-org:serviceId:altui1",
+		HA = "urn:micasaverde-com:serviceId:HaDevice1",
+		SP = "urn:upnp-org:serviceId:SwitchPower1"
+		},
 	RemoteIconURL = "http://www.reneboer.demon.nl/veraimg/",
 	UI7IconURL = "",
 	UI5IconURL = "icons\\/",
 	f_path = '/etc/cmh-ludl/',
 	onOpenLuup = false,
-	syslog,
 	MaxButtonUI5 = 24,  -- Keep the same as HAM_MAXBUTTONS in J_Harmony.js
 	MaxButtonUI7 = 25,  -- Keep the same as HAM_MAXBUTTONS in J_Harmony_UI7.js
 	Plugin_Disabled = false,
-	LogLevel = 3,
---	LogLevel = 10,
 	Busy = false,
 	BusyChange = 0,
 	StartActivityBusy = 0,
@@ -168,149 +173,249 @@ local TaskData = {
 ---------------------------------------------------------------------------------------------
 -- Utility functions
 ---------------------------------------------------------------------------------------------
-local function log(text, level) 
-	local level = (level or 10)
-	if (HData.LogLevel >= level) then
-		if (HData.syslog) then
-			local slvl
-			if (level == 1) then slvl = 2 
-			elseif (level == 2) then slvl = 4 
-			elseif (level == 3) then slvl = 5 
-			elseif (level == 4) then slvl = 5 
-			elseif (level == 7) then slvl = 6 
-			elseif (level == 8) then slvl = 6 
-			else slvl = 7
-			end
-			HData.syslog:send(text,slvl) 
+local log
+local var
+local utils
+
+
+-- API getting and setting variables and attributes from Vera more efficient.
+local function varAPI()
+	local def_sid, def_dev = '', 0
+	
+	local function _init(sid,dev)
+		def_sid = sid
+		def_dev = dev
+	end
+	
+	-- Get variable value
+	local function _get(name, sid, device)
+		local value = luup.variable_get(sid or def_sid, name, tonumber(device or def_dev))
+		return (value or '')
+	end
+
+	-- Get variable value as number type
+	local function _getnum(name, sid, device)
+		local value = luup.variable_get(sid or def_sid, name, tonumber(device or def_dev))
+		local num = tonumber(value,10)
+		return (num or 0)
+	end
+	
+	-- Set variable value
+	local function _set(name, value, sid, device)
+		local sid = sid or def_sid
+		local device = tonumber(device or def_dev)
+		local old = luup.variable_get(sid, name, device)
+		if (tostring(value) ~= tostring(old or '')) then 
+			luup.variable_set(sid, name, value, device)
+		end
+	end
+
+	-- create missing variable with default value or return existing
+	local function _default(name, default, sid, device)
+		local sid = sid or def_sid
+		local device = tonumber(device or def_dev)
+		local value = luup.variable_get(sid, name, device) 
+		if (not value) then
+			value = default	or ''
+			luup.variable_set(sid, name, value, device)	
+		end
+		return value
+	end
+	
+	-- Get an attribute value, try to return as number value if applicable
+	local function _getattr(name, device)
+		local value = luup.attr_get(name, tonumber(device or def_dev))
+		local nv = tonumber(value,10)
+		return (nv or value)
+	end
+
+	-- Set an attribute
+	local function _setattr(name, value, device)
+		luup.attr_set(name, value, tonumber(device or def_dev))
+	end
+	
+	return {
+		Get = _get,
+		Set = _set,
+		GetNumber = _getnum,
+		Default = _default,
+		GetAttribute = _getattr,
+		SetAttribute = _setattr,
+		Initialize = _init
+	}
+end
+
+-- API to handle basic logging and debug messaging
+local function logAPI()
+local _LLError = 1
+local _LLWarning = 2
+local _LLInfo = 8
+local _LLDebug = 11
+local def_level = _Error
+local def_prefix = ''
+local def_debug = false
+
+	local function _update(level)
+		if level > 10 then
+			def_debug = true
+			def_level = 10
 		else
+			def_debug = false
+			def_level = lev
+		end
+	end	
+
+	local function _init(prefix, level)
+		_update(level)
+		def_prefix = prefix
+	end	
+
+	local function _log(text, level) 
+		local level = (level or 10)
+		if (def_level >= level) then
 			if (level == 10) then level = 50 end
-			luup.log(HData.Description .. ": " .. text or "no text", (level or 50)) 
+			local msg = (text or "no text")
+			luup.log(def_prefix .. ": " .. msg:sub(1,60), (level or 50)) 
 		end	
 	end	
+	
+	local function _debug(text)
+		if def_debug then
+			luup.log(def_prefix .. "_debug: " .. (text or "no text"), 50) 
+		end	
+	end
+	
+	return {
+		Initialize = _init,
+		LLError = _LLError,
+		LLWarning = _LLWarning,
+		LLInfo = _LLInfo,
+		LLDebug = _LLDebug,
+		Update = _update,
+		Log = _log,
+		Debug = _debug
+	}
 end 
--- Get variable value.
--- Use HData.SID and HData.DEVICE as defaults
-local function varGet(name, device, service)
-	local value = luup.variable_get(service or HData.SID, name, tonumber(device or HData.DEVICE))
-	return (value or '')
-end
--- Update variable when value is different than current.
--- Use HData.SID and HData.DEVICE as defaults
-local function varSet(name, value, device, service)
-	local service = service or HData.SID
-	local device = tonumber(device or HData.DEVICE)
-	local old = varGet(name, device, service)
-	if (tostring(value) ~= tostring(old)) then 
-		luup.variable_set(service, name, value, device)
+
+-- API to handle some Util functions
+local function utilsAPI()
+local _UI5 = 5
+local _UI6 = 6
+local _UI7 = 7
+local _UI8 = 8
+local _OpenLuup = 99
+
+	local function _init()
+	end	
+
+	-- See what system we are running on, some Vera or OpenLuup
+	local function _getui()
+	luup.log(luup.attr_get("openLuup",0))
+		if (luup.attr_get("openLuup",0) ~= nil) then
+			return _OpenLuup
+		else
+			return luup.version_major
+		end
+		return _UI7
 	end
-end
---get device Variables, creating with default value if non-existent
-local function defVar(name, default, device, service)
-	local service = service or HData.SID
-	local device = tonumber(device or HData.DEVICE)
-	local value = luup.variable_get(service, name, device) 
-	if (not value) then
-		value = default	or ''							-- use default value or blank
-		luup.variable_set(service, name, value, device)	-- create missing variable with default value
+	
+	local function _getmemoryused()
+		return math.floor(collectgarbage "count")         -- app's own memory usage in kB
 	end
-	return value
-end
+	
+	local function _setluupfailure(status,devID)
+		if (luup.version_major < 7) then status = status ~= 0 end        -- fix UI5 status type
+		luup.set_failure(status,devID)
+	end
+
+	-- Luup Reload function for UI5,6 and 7
+	local function _luup_reload()
+		if (luup.version_major < 6) then 
+			luup.call_action("urn:micasaverde-com:serviceId:HomeAutomationGateway1", "Reload", {}, 0)
+		else
+			luup.reload()
+		end
+	end
+	
+	-- Create links for UI6 or UI7 image locations if missing.
+	local function _check_images(imageTable)
+		local imagePath =""
+		local sourcePath = "/www/cmh/skins/default/icons/"
+		if (luup.version_major >= 7) then
+			imagePath = "/www/cmh/skins/default/img/devices/device_states/"
+		elseif (luup.version_major == 6) then
+			imagePath = "/www/cmh_ui6/skins/default/icons/"
+		else
+			-- Default if for UI5, no idea what applies to older versions
+			imagePath = "/www/cmh/skins/default/icons/"
+		end
+		if (imagePath ~= sourcePath) then
+			for i = 1, #imageTable do
+				local source = sourcePath..imageTable[i]..".png"
+				local target = imagePath..imageTable[i]..".png"
+				os.execute(("[ ! -e %s ] && ln -s %s %s"):format(target, source, target))
+			end
+		end	
+	end
+	
+	return {
+		Initialize = _init,
+		ReloadLuup = _luup_reload,
+		CheckImages = _check_images,
+		GetMemoryUsed = _getmemoryused,
+		SetLuupFailure = _setluupfailure,
+		GetUI = _getui,
+		IsUI5 = _UI5,
+		IsUI6 = _UI6,
+		IsUI7 = _UI7,
+		IsUI8 = _UI8,
+		IsOpenLuup = _OpenLuup
+	}
+end 
+
+
 -- Set message in task window.
 local function task(text, mode) 
 	local mode = mode or TaskData.ERROR 
 	if (mode ~= TaskData.SUCCESS) then 
 		if (mode == TaskData.ERROR_PERM) then
-			log("task: " .. (text or "no text"), 1) 
+			log.Log("task: " .. (text or "no text"), log.LLError) 
 		else	
-			log("task: " .. (text or "no text")) 
+			log.Log("task: " .. (text or "no text")) 
 		end 
 	end 
 	TaskData.taskHandle = luup.task(text, (mode == TaskData.ERROR_PERM) and TaskData.ERROR or mode, TaskData.Description, TaskData.taskHandle) 
 end 
--- Set a luup failure message
-local function setluupfailure(status,devID)
-	if (luup.version_major < 7) then status = status ~= 0 end        -- fix UI5 status type
-	luup.set_failure(status,devID)
-end
+
 -- V2.4 Check how much memory the plug in uses
 function checkMemory()
-	local AppMemoryUsed =  math.floor(collectgarbage "count")         -- app's own memory usage in kB
-	varSet("AppMemoryUsed", AppMemoryUsed) 
+	var.Set("AppMemoryUsed", utils.GetMemoryUsed()) 
 	luup.call_delay("checkMemory", 600)
 end
--- Syslog server support. From Netatmo plugin by akbooer
-local function syslog_server (ip_and_port, tag, hostname)
-	local sock = socketLib.udp()
-	local facility = 1    -- 'user'
-	local emergency, alert, critical, error, warning, notice, info, debug = 0,1,2,3,4,5,6,7
-	local ip, port = ip_and_port: match "^(%d+%.%d+%.%d+%.%d+):(%d+)$"
-	if not ip or not port then return nil, "invalid IP or PORT" end
-	local serialNo = luup.pk_accesspoint
-	hostname = ("Vera-"..serialNo) or "Vera"
-	if not tag or tag == '' then tag = HData.Description end
-	tag = tag:gsub("[^%w]","") or "HarmonyHub"  -- only alphanumeric, no spaces or other
-	local function send (self, content, severity)
-		content  = tostring (content)
-		severity = tonumber (severity) or info
-		local priority = facility*8 + (severity%8)
-		local msg = ("<%d>%s %s %s: %s\n"):format (priority, os.date "%b %d %H:%M:%S", hostname, tag, content)
-		sock:send (msg) 
-	end
-	local ok, err = sock:setpeername(ip, port)
-	if ok then ok = {send = send} end
-	return ok, err
-end
+
 -- Set the status Icon
 local function setStatusIcon(status, devID, sid)
 	if (status == HData.Icon.OK) then
 		-- When status is success, then clear after number of seconds
-		local idleDelay = varGet("OkInterval")
+		local idleDelay = var.Get("OkInterval")
 		if (tonumber(idleDelay) > 0) then
-			varSet(HData.Icon.Variable, HData.Icon.OK, devID, sid)
+			var.Set(HData.Icon.Variable, HData.Icon.OK, sid, devID)
 			luup.call_delay("idleStatusIcon", idleDelay, tostring(devID or ""), false)
 		else
-			varSet(HData.Icon.Variable, HData.Icon.IDLE, devID, sid)
+			var.Set(HData.Icon.Variable, HData.Icon.IDLE, sid, devID)
 		end
 	else	
-		varSet(HData.Icon.Variable, status, devID, sid)
+		var.Set(HData.Icon.Variable, status, sid, devID)
 	end
 end
 function idleStatusIcon(devIDstr)
 	local devID
 	if (devIDstr ~= "") then devID = tonumber(devIDstr) end
-	local status = varGet(HData.Icon.Variable, devID)
+	local status = var.Get(HData.Icon.Variable, devID)
 	-- When status is success, then clear else do not change
 	if (status == HData.Icon.OK) then
-		varSet(HData.Icon.Variable, HData.Icon.IDLE, devID)
+		var.Set(HData.Icon.Variable, HData.Icon.IDLE, HData.SIDS.MODULE, devID)
 	end
-end
--- Luup Reload function for UI5,6 and 7
-local function luup_reload()
-	if (luup.version_major < 6) then 
-		luup.call_action("urn:micasaverde-com:serviceId:HomeAutomationGateway1", "Reload", {}, 0)
-	else
-		luup.reload()
-	end
-end
--- Create links for UI6 or UI7 image locations if missing.
-local function check_images(imageTable)
-	local imagePath =""
-	local sourcePath = "/www/cmh/skins/default/icons/"
-	if (luup.version_major >= 7) then
-		imagePath = "/www/cmh/skins/default/img/devices/device_states/"
-	elseif (luup.version_major == 6) then
-		imagePath = "/www/cmh_ui6/skins/default/icons/"
-	else
-		-- Default if for UI5, no idea what applies to older versions
-		imagePath = "/www/cmh/skins/default/icons/"
-	end
-	if (imagePath ~= sourcePath) then
-		for i = 1, #imageTable do
-			local source = sourcePath..imageTable[i]..".png"
-			local target = imagePath..imageTable[i]..".png"
-			os.execute(("[ ! -e %s ] && ln -s %s %s"):format(target, source, target))
-		end
-	end	
 end
 -- Set or clear Busy status.
 local function SetBusy(status, setIcon)
@@ -393,9 +498,9 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut, wait)
 
 	-- Open socket to Hub
 	local function Connect()
-		if ((ipa or "") == "") then log("Connect, no IP Address specified ",1) return false end
+		if ((ipa or "") == "") then log.Log("Connect, no IP Address specified ",log.LLError) return false end
 		sock = socketLib.connect(ipa, CommunicationPort)
-		if (sock == nil) then log("Connect, failed to open socket to hub " .. ipa, 1) return false end
+		if (sock == nil) then log.Log("Connect, failed to open socket to hub " .. ipa, log.LLError) return false end
 		-- V2.1 suggestion, data should normally come back faster than the default 60 seconds
 		sock:settimeout(commTimeOut)
 		return true
@@ -409,7 +514,7 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut, wait)
 	-- Get the Session Token using the Authentication token
 	local function GetSessionToken(authToken)
 		-- Any token seems to do at the moment, Authentication is a farce
-		varSet("AuthorizationToken", "guest")
+		var.Set("AuthorizationToken", "guest")
 		sessToken = "guest"
 		return true
 	end
@@ -446,7 +551,7 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut, wait)
 			cmdStr = cmdStr .. 'holdAction">' .. devcmd .. ':status='..(prs or 'release')..':timestamp='..timestamp..'</oa></iq>'
 			if (prs == 'press') then timestamp = timestamp + 54 else timestamp = timestamp + 100 end
 		else	
-			log("SubmitCommand, Unknown command " .. cmd,10)
+			log.Log("SubmitCommand, Unknown command " .. cmd)
 			isBusy = false
 			return ERR_CD.ERR, "Unknown command", cmd
 		end
@@ -502,7 +607,7 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut, wait)
 						done = true
 					end	
 				elseif ((ret or "") == '<me') then 
-					log("Get message ",10)
+					log.Debug("Get message")
 					-- get message length part, then the message
 					_ = GetHubResponse('/>')
 					msgResp = GetHubResponse('</message>')
@@ -515,20 +620,20 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut, wait)
 					starttime = os.time()
 				else
 					-- Not sure what we are getting after the normal acknowledge, but return it
-					log("SubmitCommand, invalid response from Hub after acknowledge |" .. (ret or "") .."|",10) 
+					log.Debug("SubmitCommand, invalid response from Hub after acknowledge |" .. (ret or "") .."|")
 					errCode, errMsg, cmdResp = ERR_CD.ERR, ERR_MSG.ERR, '<iq/>' .. ( ret or "") 
 					done = true
 				end	
 				-- Check for time out
 				if (done == false) and (os.difftime(os.time(), starttime) > (commTimeOut * 5)) then 
-					log("SubmitCommand, time out waiting response from Hub after acknowledge : " .. ( ret or ""),10) 
+					log.Log("SubmitCommand, time out waiting response from Hub after acknowledge : " .. ( ret or "")) 
 					errCode, errMsg, cmdResp = ERR_CD.ERR, ERR_MSG.ERR, 'timeout' 
 					done = true
 				end
 			until done
 		else
 			-- Not getting the response we are assuming
-			log("SubmitCommand, invalid response from Hub instead of acknowledge : " .. ( ret or ""),10) 
+			log.Log("SubmitCommand, invalid response from Hub instead of acknowledge : " .. ( ret or "")) 
 			errCode, errMsg, cmdResp = ERR_CD.ERR, ERR_MSG.ERR, ( ret or "") 
 		end
 		-- V2.1 suggestion, data should normally come back faster than the default 60 seconds
@@ -558,19 +663,19 @@ end
 ---------------------------------------------------------------------------------------------
 -- Update the last command sent to Hub and when
 local function SetLastCommand(cmd)
-	varSet("LastCommand", cmd)
-	varSet("LastCommandTime", os.date("%X %a, %d %b %Y"))
+	var.Set("LastCommand", cmd)
+	var.Set("LastCommandTime", os.date("%X %a, %d %b %Y"))
 end
 
 -- Send the command to the Harmony Hub.
 -- Return Status true on success and return string, else false
 local function Harmony_cmd(cmd, id, devCmd, prs)
 	if (Harmony == nil) then 
-		varSet("LinkStatus","Error")
+		var.Set("LinkStatus","Error")
 		return false, "501", "No handler", " " 
 	end
 	local stat, msg, harmonyOutput
-	log("Sending command cmd=" .. cmd,10)
+	log.Debug("Sending command cmd=" .. cmd)
 	local stat = Harmony.Connect()
 	if (stat == true) then 
 		stat, msg, harmonyOutput = Harmony.SubmitCommand(HData.CMD[cmd].cmd, id, devCmd, false, prs)
@@ -582,12 +687,12 @@ local function Harmony_cmd(cmd, id, devCmd, prs)
 	end
 	if (stat == '200') then
 		task("Clearing...", TaskData.SUCCESS)
-		varSet("LinkStatus","Ok")
-		log("CMD: return value : " .. stat .. ", " .. msg .. ", " .. harmonyOutput:sub(1,50),10)
+		var.Set("LinkStatus","Ok")
+		log.Debug("CMD: return value : " .. stat .. ", " .. msg .. ", " .. harmonyOutput:sub(1,50))
 		return true, stat, msg, harmonyOutput
 	else
-		varSet("LinkStatus","Error")
-		log("CMD: errcode="  .. stat .. ", errmsg=" .. msg,10)
+		var.Set("LinkStatus","Error")
+		log.Log("CMD: errcode="  .. stat .. ", errmsg=" .. msg)
 		task("CMD: Failed sending command " .. cmd .. " to Harmony Hub - errorcode="  .. stat .. ", errormessage=" .. msg, TaskData.ERROR)
 		return false, stat, msg, (harmonyOutput or '')
 	end	
@@ -597,22 +702,28 @@ end
 -- When PollInterval is zero then do not repeat it.
 function Harmony_PollCurrentActivity()
 	-- See if user want to repeat polling
-	local pollper = varGet("PollInterval")
-	if (pollper ~= "0") then 
-		luup.call_delay("Harmony_PollCurrentActivity", tonumber(pollper), "", false)
-		-- See if we are not polling too close to start activity. This can give false results
-		if (not GetBusy()) and (os.difftime(os.time(), HData.StartActivityBusy) > 60) then
-			local stat, actID = Harmony_GetCurrentActivtyID()
-			if (stat == true) then 
-				log('PollCurrentActivity found activity ID : ' .. actID,10) 
+	local pollper = var.GetNumber("PollInterval")
+	if (pollper ~= 0) then 
+		luup.call_delay("Harmony_PollCurrentActivity", pollper, "", false)
+		local pollho = var.GetNumber("PollHomeOnly")
+		local house_mode = var.GetAttribute("Mode",0)
+		if pollho == 0 or house_mode == 1 then
+			-- See if we are not polling too close to start activity. This can give false results
+			if (not GetBusy()) and (os.difftime(os.time(), HData.StartActivityBusy) > 60) then
+				local stat, actID = Harmony_GetCurrentActivtyID()
+				if (stat == true) then 
+					log.Debug('PollCurrentActivity found activity ID : ' .. actID) 
+				else 
+					log.Log('PollCurrentActivity error getting activity') 
+				end
 			else 
-				log('PollCurrentActivity error getting activity',10) 
+				log.Debug('PollCurrentActivity busy or too close to Activity change') 
 			end
 		else 
-			log('PollCurrentActivity busy or too close to Activity change',10) 
+			log.Debug('PollCurrentActivity not at Home so skipping polling.')
 		end
 	else
-		log('PollCurrentActivity stopping polling.',8)
+		log.Log('PollCurrentActivity stopping polling.',log.LLInfo)
 	end	
 end
 
@@ -621,7 +732,7 @@ end
 function Harmony_GetConfig(cmd, id, fmt)
 	local message = ''
 	local dataTab = {}
-	log("GetConfig",10)
+	log.Debug("GetConfig")
 	local status, cd, msg, harmonyOutput = Harmony_cmd('get_config')
 	if (status == true) then
 		SetLastCommand(cmd)
@@ -632,7 +743,7 @@ function Harmony_GetConfig(cmd, id, fmt)
 		else
 			-- See what part we need to return
 			if (cmd == 'list_activities') then 
-				log("Activities found : " .. #confg.activity,10)
+				log.Debug("Activities found : " .. #confg.activity)
 				-- List all activities supported
 				dataTab.activities = {}
 				for i = 1, #confg.activity do
@@ -641,7 +752,7 @@ function Harmony_GetConfig(cmd, id, fmt)
 					dataTab.activities[i].Activity = confg.activity[i].label
 				end
 			elseif (cmd == 'list_commands') then
-				log("Devices found : " .. #confg.device,10)
+				log.Debug("Devices found : " .. #confg.device)
 				-- List all Commands from all Devices supported
 				dataTab.commands = {}
 				for i = 1, #confg.device do
@@ -662,7 +773,7 @@ function Harmony_GetConfig(cmd, id, fmt)
 					end	
 				end
 			elseif (cmd == 'list_devices') then 
-				log("Devices found : " .. #confg.device,10)
+				log.Debug("Devices found : " .. #confg.device)
 				-- List all devices supported
 				dataTab.devices = {}
 				for i = 1, #confg.device do
@@ -673,7 +784,7 @@ function Harmony_GetConfig(cmd, id, fmt)
 					dataTab.devices[i].Manufacturer = confg.device[i].manufacturer
 				end
 			elseif (cmd == 'list_device_commands') then
-				log("Devices found : " .. #confg.device,10)
+				log.Debug("Devices found : " .. #confg.device)
 				-- List all commands supported by given device grouped by function
 				for i = 1, #confg.device do
 					if (confg.device[i].id == id) then
@@ -695,7 +806,7 @@ function Harmony_GetConfig(cmd, id, fmt)
 					end	
 				end
 			elseif (cmd == 'list_device_commands_shrt') then
-				log("Devices found : " .. #confg.device,10)
+				log.Debug("Devices found : " .. #confg.device)
 				-- List all commands supported by given device
 				dataTab.devicecommands = {} 
 				for i = 1, #confg.device do
@@ -723,7 +834,7 @@ function Harmony_GetConfig(cmd, id, fmt)
 	end
 	-- If we had an error return that
 	if (status == false) then 
-		log("GetConfig, " .. message) 
+		log.Log("GetConfig, " .. message) 
 		dataTab.status = HData.ER 
 		dataTab.message = message .. (harmonyOutput or "")
 		return false, dataTab 
@@ -737,7 +848,7 @@ end
 -- Output: True on success, or JSON when called from HTTPhandler
 function Harmony_IssueDeviceCommand(devID, devCmd, devDur, hnd, fmt)
 	if (HData.Plugin_Disabled == true) then
-		log("IssueDeviceCommand : Plugin disabled.",3)
+		log.Log("IssueDeviceCommand : Plugin disabled.",log.LLWarning)
 		return true
 	end
 	local cmd = 'issue_device_command'
@@ -748,12 +859,12 @@ function Harmony_IssueDeviceCommand(devID, devCmd, devDur, hnd, fmt)
 	-- When not called from HTTP Request handler, set busy status
 	if (hnd == false) then 
 		if (GetBusy()) then
-			log("IssueDeviceCommand communication is busy",10)
+			log.Debug("IssueDeviceCommand communication is busy")
 			return false 
 		end
 		SetBusy(true, true)
 	end
-	log("IssueDeviceCommand, devID : " .. devID .. ", devCmd : " .. devCmd .. ", devDur : " .. dur,10)
+	log.Debug("IssueDeviceCommand, devID : " .. devID .. ", devCmd : " .. devCmd .. ", devDur : " .. dur)
 	if ((devID ~= "") and (devCmd ~= "")) then 
 		status, cd, msg, harmonyOutput = Harmony_cmd(cmd, devID, devCmd, 'press')
 		-- Send hold commands each half second if there is to be a longer key press. Max is 15 seconds.
@@ -774,7 +885,7 @@ function Harmony_IssueDeviceCommand(devID, devCmd, devDur, hnd, fmt)
 		message = "no DeviceID and/or Command specified... "
 		status = false
 	end	
-	if (status == false) then log("ERROR: IssueDeviceCommand, " .. message) end
+	if (status == false) then log.Log("ERROR: IssueDeviceCommand, " .. message) end
 	if (hnd == false) then
 		-- When not called from HTTP Request handler, clear busy status
 		SetBusy(false, true)
@@ -798,7 +909,7 @@ end
 -- Output: Activity ID on success, or JSON when called from HTTPhandler
 function Harmony_GetCurrentActivtyID(hnd, fmt)
 	if (HData.Plugin_Disabled == true) then
-		log("GetCurrentActivtyID : Plugin disabled.",3)
+		log.Log("GetCurrentActivtyID : Plugin disabled.",log.LLWarning)
 		return true, "Plugin Disabled"
 	end
 	local cmd = 'get_current_activity_id'
@@ -808,15 +919,15 @@ function Harmony_GetCurrentActivtyID(hnd, fmt)
 	-- When not called from HTTP Request handler, set busy status
 	if (hnd == false) then 
 		if (GetBusy()) then 
-			log("GetCurrentActivtyID communication is busy",10)
+			log.Log("GetCurrentActivtyID communication is busy")
 			return false 
 		end
 		SetBusy(true, true)
 	end
-	log("GetCurrentActivtyID",10)
+	log.Debug("GetCurrentActivtyID")
 	local status, cd, msg, harmonyOutput = Harmony_cmd(cmd)
 	if (status == true) then
-		log("GetCurrentActivtyID : " .. (harmonyOutput or ""),10)
+		log.Debug("GetCurrentActivtyID : " .. (harmonyOutput or ""))
 -- V2.10 start
 --		-- Check length of reported activity, if 2 or 8
 --		local ln = harmonyOutput:len()
@@ -826,25 +937,25 @@ function Harmony_GetCurrentActivtyID(hnd, fmt)
 		if (tonumber(currentActivity)) then
 --V2.10 end		
 			SetLastCommand(cmd)
-			log("GetCurrentActivtyID found activity : " .. currentActivity,10)
-			varSet("CurrentActivityID", currentActivity)
+			log.Debug("GetCurrentActivtyID found activity : " .. currentActivity)
+			var.Set("CurrentActivityID", currentActivity)
 			-- Set the target and activity so we can show off/on on Vera App
 			if (currentActivity ~= '-1') then 
-				varSet("Target", "1", HData.DEVICE, HData.SWSID)
-				varSet("Status", "1", HData.DEVICE, HData.SWSID)
+				var.Set("Target", "1", HData.SIDS.SP)
+				var.Set("Status", "1", HData.SIDS.SP)
 			else 
-				varSet("Target", "0", HData.DEVICE, HData.SWSID)
-				varSet("Status", "0", HData.DEVICE, HData.SWSID)
+				var.Set("Target", "0", HData.SIDS.SP)
+				var.Set("Status", "0", HData.SIDS.SP)
 			end
 		else
 			message = "failed to Get Current Activity...  errorcode="  .. cd .. ", errormessage=" .. msg
-			log("GetCurrentActivtyID, ERROR " .. message .. " : " .. (harmonyOutput or "")) 
+			log.Log("GetCurrentActivtyID, ERROR " .. message .. " : " .. (harmonyOutput or "")) 
 -- V2.10			currentActivity = ''
 			status = false
 		end
 	else
 		message = "failed to Get Current Activity...  errorcode="  .. cd .. ", errormessage=" .. msg
-		log("GetCurrentActivtyID, ERROR " .. message ..  " : " .. (harmonyOutput or "")) 
+		log.Log("GetCurrentActivtyID, ERROR " .. message ..  " : " .. (harmonyOutput or "")) 
 	end	
 	if (hnd == false) then
 		-- When not called from HTTP Request handler, clear busy status
@@ -870,15 +981,15 @@ end
 -- Output: True on success, or JSON when called from HTTPhandler
 function Harmony_StartActivity(actID, hnd, fmt)
 	if (HData.Plugin_Disabled == true) then
-		log("StartActivity : Plugin disabled.",3)
+		log.Log("StartActivity : Plugin disabled.",log.LLWarning)
 		return true
 	end
 	-- 2.13, do not repeat sending if activity is already the current.
-	if (varGet("PollInterval") ~= '0') then
-		local curActID = tonumber(varGet("CurrentActivityID"))
+	if (var.GetNumber("PollInterval") ~= 0) then
+		local curActID = var.GetNumber("CurrentActivityID")
 		if (curActID == tonumber(actID)) then
 			local message = "Activity "..actID.." is the same as the current one. Not resending."
-			log("StartActivity : "..message,10)
+			log.Debug("StartActivity : "..message)
 			if (hnd == false) then
 				return true
 			else
@@ -901,26 +1012,26 @@ function Harmony_StartActivity(actID, hnd, fmt)
 	-- When not called from HTTP Request handler, set busy status
 	if (hnd == false) then 
 		if (GetBusy()) then 
-			log("StartActivity communication is busy",10)
+			log.Debug("StartActivity communication is busy")
 			return false 
 		end
 		SetBusy(true, true)
 	end
-	log("StartActivity, newActivityID : " .. actID,10)
+	log.Debug("StartActivity, newActivityID : " .. actID)
 	if (actID ~= "") then 
 		-- Start activity
-		log("StartActivity, ActivityID : " .. actID,10)
+		log.Debug("StartActivity, ActivityID : " .. actID)
 		-- Set value now to give quicker user feedback on UI
 		status, cd, msg, harmonyOutput = Harmony_cmd (cmd, actID)
 		if (status == true) then
-			varSet("CurrentActivityID", actID)
+			var.Set("CurrentActivityID", actID)
 			-- Set the target and activity so we can show off/on on Vera App
 			if (actID ~= '-1') then 
-				varSet("Target", "1", HData.DEVICE, HData.SWSID)
-				varSet("Status", "1", HData.DEVICE, HData.SWSID)
+				var.Set("Target", "1", HData.SIDS.SP)
+				var.Set("Status", "1", HData.SIDS.SP)
 			else 
-				varSet("Target", "0", HData.DEVICE, HData.SWSID)
-				varSet("Status", "0", HData.DEVICE, HData.SWSID)
+				var.Set("Target", "0", HData.SIDS.SP)
+				var.Set("Status", "0", HData.SIDS.SP)
 			end
 			SetLastCommand(cmd)
 		else
@@ -929,7 +1040,7 @@ function Harmony_StartActivity(actID, hnd, fmt)
 	else
 		message = "no newActivityID specified... "
 	end	
-	if (status == false) then log("StartActivity, ERROR " .. message .. (harmonyOutput or "")) end
+	if (status == false) then log.Log("StartActivity, ERROR " .. message .. (harmonyOutput or "")) end
 	HData.StartActivityBusy = os.time()
 	if (hnd == false) then
 		-- When not called from HTTP Request handler, clear busy status
@@ -953,50 +1064,50 @@ end
 --  devDur = key-press duration in seconds
 function Harmony_SendDeviceCommand(lul_device,devCmd,devDur)
 	if (HData.Plugin_Disabled == true) then
-		log("SendDeviceCommand : Plugin disabled.",3)
+		log.Log("SendDeviceCommand : Plugin disabled.",log.LLWarning)
 		return true
 	end
 	local cmd = (devCmd or "")
 	local dur = (devDur or "0")
-	local devID = varGet("DeviceID",lul_device, HData.CHSID)
-	local prevCmd = varGet("LastDeviceCommand",lul_device, HData.CHSID)
-	log("SendDeviceCommand "..cmd.." for device #"..lul_device.." to Harmony Device "..devID,10)
-	varSet("LastDeviceCommand",cmd,lul_device, HData.CHSID)
+	local devID = var.Get("DeviceID", HData.SIDS.CHILD, lul_device)
+	local prevCmd = var.Get("LastDeviceCommand", HData.SIDS.CHILD, lul_device)
+	log.Debug("SendDeviceCommand "..cmd.." for device #"..lul_device.." to Harmony Device "..devID)
+	var.Set("LastDeviceCommand", cmd, HData.SIDS.CHILD, lul_device)
 	local starttime = os.time()
-	setStatusIcon(HData.Icon.BUSY, lul_device, HData.CHSID)
+	setStatusIcon(HData.Icon.BUSY, lul_device, HData.SIDS.CHILD)
 	local status = Harmony_IssueDeviceCommand(devID, cmd, dur)
 	-- see if user want to show the button status for a tad longer
-	local idleDelay = varGet("OkInterval")
-	if (tonumber(idleDelay) > 0) then
-		luup.call_delay('Harmony_SendDeviceCommandEnd',tonumber(idleDelay), tostring(lul_device), false)
+	local idleDelay = var.GetNumber("OkInterval")
+	if (idleDelay > 0) then
+		luup.call_delay('Harmony_SendDeviceCommandEnd',idleDelay, tostring(lul_device), false)
 	else
-		setStatusIcon(HData.Icon.IDLE, lul_device, HData.CHSID)
-		varSet("LastDeviceCommand","",lul_device, HData.CHSID)
+		setStatusIcon(HData.Icon.IDLE, lul_device, HData.SIDS.CHILD)
+		var.Set("LastDeviceCommand", "", HData.SIDS.CHILD, lul_device)
 	end
 	return status
 end
 
 -- Clear the last device command after no button has been clicked for more then OkInterval seconds
 function Harmony_SendDeviceCommandEnd(devID)
-	log('SendDeviceCommandEnd for child device #'..devID,10)
+	log.Debug('SendDeviceCommandEnd for child device #'..devID)
 	if (devID == nil) then return end
 	if (devID == '') then return end
 	local lul_device = tonumber(devID)
-	local value, tstamp = luup.variable_get(HData.CHSID, "LastDeviceCommand", lul_device)
+	local value, tstamp = luup.variable_get(HData.SIDS.CHILD, "LastDeviceCommand", lul_device)
 	value = value or ""
-	luup.log('LastDeviceCommand current value'..value)
+	log.Log('LastDeviceCommand current value'..value)
 	if (value ~= "") then
-		local idleDelay = varGet("OkInterval")
-		if (tonumber(idleDelay) > 0) then
-			if (os.difftime(os.time(), tstamp) > tonumber(idleDelay)) then
-				setStatusIcon(HData.Icon.IDLE, lul_device, HData.CHSID)
-				varSet("LastDeviceCommand","",lul_device, HData.CHSID)
+		local idleDelay = var.GetNumber("OkInterval")
+		if (idleDelay > 0) then
+			if (os.difftime(os.time(), tstamp) > idleDelay) then
+				setStatusIcon(HData.Icon.IDLE, lul_device, HData.SIDS.CHILD)
+				var.Set("LastDeviceCommand", "", HData.SIDS.CHILD, lul_device)
 			else	
 				luup.call_delay('Harmony_SendDeviceCommandEnd',1, devID)
 			end
 		else	
-			setStatusIcon(HData.Icon.IDLE, lul_device, HData.CHSID)
-			varSet("LastDeviceCommand","",lul_device, HData.CHSID)
+			setStatusIcon(HData.Icon.IDLE, lul_device, HData.SIDS.CHILD)
+			var.Set("LastDeviceCommand", "", HData.SIDS.CHILD, lul_device)
 		end	
 	end	
 end
@@ -1012,9 +1123,9 @@ function HTTP_Harmony (lul_request, lul_parameters, lul_outputformat)
 	local cmdp1 = ''
 	local cmdp2 = ''
 	local cmdp3 = ''
-	log('request is: '..tostring(lul_request),10)
+	log.Debug('request is: '..tostring(lul_request))
 	for k,v in pairs(lul_parameters) do 
-		log ('parameters are: '..tostring(k)..'='..tostring(v),10) 
+		log.Log ('parameters are: '..tostring(k)..'='..tostring(v)) 
 		k = k:lower()
 		if (k == 'cmd') then cmd = v 
 		elseif (k == 'format') then outFormat = v 
@@ -1023,9 +1134,9 @@ function HTTP_Harmony (lul_request, lul_parameters, lul_outputformat)
 		elseif (k == 'cmdp3') then cmdp3 = v 
 		end
 	end
-	log('outputformat is: '..outFormat,10)
+	log.Debug('outputformat is: '..outFormat)
 	if (GetBusy()) then
-		log('we are busy..fail... ',10)
+		log.Log('we are busy..fail... ')
 		if (outFormat == HData.PL) then 
 			return "ERROR: Busy performing another command, please retry in a bit"
 		else
@@ -1080,12 +1191,12 @@ end
 -- Output if any is always JSON from the Harmony, no formatting on it.
 function HTTP_HarmonyInt (lul_request, lul_parameters, lul_outputformat)
 	if (GetBusy()) then
-		log('Busy processing other request, sleep a second.',10)
+		log.Log('Busy processing other request, sleep a second.')
 		return 'Busy processing other request. Please retry in a moment.'
 	end
 	SetBusy(true,true)
-	log('request is: '..tostring(lul_request),10)
-	log('outputformat is: '..tostring(lul_outputformat),10)
+	log.Debug('request is: '..tostring(lul_request))
+	log.Debug('outputformat is: '..tostring(lul_outputformat))
 	local function exec ()
 		local retStat, retVal = false, ""
 		if (lul_outputformat ~= "xml") then
@@ -1099,7 +1210,7 @@ function HTTP_HarmonyInt (lul_request, lul_parameters, lul_outputformat)
 			if (retStat == false) then return "" end
 			return json.encode(retVal) 
 		else
-		log("unsupported format")
+			log.Log("unsupported format")
 			return "Unsupported format : " .. lul_outputformat
 		end
 	end
@@ -1115,24 +1226,22 @@ end
 -- Remove them as it will cause issues when child for same device is recreated.
 local function removeObsoleteChildDeviceFiles(childDevs)
 	local chDev = (childDevs or '') .. ','
-	local tmpfile = '/tmp/ham'..HData.DEVICE..'_file.txt'
-	os.execute('ls -A1 '..HData.f_path..'D_HarmonyDevice'..HData.DEVICE..'_*.* > '..tmpfile)
-	for fname in io.lines(tmpfile) do
-		local dname = string.match(fname, "D_HarmonyDevice'..HData.DEVICE..'_%d+.")
-		local dnum, tmp
-		if (dname ~= nil) then tmp,dnum = string.match(dname, "(%d+)_(%d+)") end
-		if (dnum ~= nil) then
-			-- We have a child device file, see if the number is still in list of child devices
-			dname = string.match(chDev, dnum..',')
-			if (dname == nil) then 
-				log('Removing obsolete child file '..fname,10)
-				os.execute('rm -f '..fname)
-			else
-				log('Child file '..fname..' still in use.',10)
+	for fname in lfs.dir(HData.f_path) do
+		local dname = string.match(fname, "D_HarmonyDevice"..HData.DEVICE.."_%d+.")
+		if (dname ~= nil) then 
+			local _,dnum = string.match(dname, "(%d+)_(%d+)")
+			if (dnum ~= nil) then
+				-- We have a child device file, see if the number is still in list of child devices
+				dname = string.match(chDev, dnum..',')
+				if (dname == nil) then 
+					log.Log('Removing obsolete child file '..fname,log.LLWarning)
+					os.remove(HData.f_path..fname)
+				else
+					log.Log('Child file '..fname..' still in use.')
+				end	
 			end	
 		end
 	end
-	os.execute('rm -f '..tmpfile)
 end
 
 -- Support functions to build reoccurring JSON elements.
@@ -1145,7 +1254,7 @@ end
 local function buildJsonVariableControl(text,top,left,width,height,grp,dtop,dleft)
 	local str = '{ "ControlType": "variable", '
 	if (grp ~= nil) then str = str .. '"ControlGroup": "'..grp..'", "top": '..dtop..', "left": '..dleft..', ' end
-	str = str .. '"Display": { "Service": "'..HData.SID..'", "Variable": "'..text..'", "Top": '..top..', "Left": '..left..', "Width": '..width..', "Height": '..height..' }}'
+	str = str .. '"Display": { "Service": "'..HData.SIDS.MODULE..'", "Variable": "'..text..'", "Top": '..top..', "Left": '..left..', "Width": '..width..', "Height": '..height..' }}'
 	return str
 end
 local function buildJsonLabel(tag,text,top,pos,scr,func)
@@ -1158,17 +1267,17 @@ local function buildJsonEvent(id,val,text)
 	local str ='{ "value": "'..val..'", "HumanFriendlyText": { "lang_tag": "ham_act_id_ch'..id..'", "text": "'..text..'" }}'
 	return str
 end
-local function buildJsonStateIcon(icon,var,val,sid)		
+local function buildJsonStateIcon(icon,vari,val,sid)		
 	local str
 	local path = ""
-	local remicons = tonumber(varGet('RemoteImages'))
+	local remicons = var.GetNumber('RemoteImages')
 	if (remicons == 1) then 
 		path = HData.RemoteIconURL
 	else
 		if (luup.version_major >= 7) then path = HData.UI7IconURL end
 	end
 	if (luup.version_major >= 7) then
-		str ='{ "img": "'..path..icon..'.png", "conditions": [ { "service": "'..sid..'", "variable": "'..var..'", "operator": "==","value": '..val..' } ]}'
+		str ='{ "img": "'..path..icon..'.png", "conditions": [ { "service": "'..sid..'", "variable": "'..vari..'", "operator": "==","value": '..val..' } ]}'
 	else
 		str = '"'..path..icon..'.png"'
 	end
@@ -1230,12 +1339,8 @@ local function buildJsonButton(btnNum,btnLab,btnID,btnDur,numBtn,isChild)
 			if (btnNum == 6) or (btnNum == 11) or (btnNum == 16)  or (btnNum == 21) then newRow = true end
 		end
 		cTop = 45 + (pTop * 25)
-		if (luup.version_major == 7) and (luup.version_minor < 4) then 
-			cWidth = 100 
-		else	
-			if (newRow) then str = str .. '{ "ControlGroup": 1, "ControlType": "line_break" },\n'	end
-			cWidth = 65 * butWidth
-		end
+		if (newRow) then str = str .. '{ "ControlGroup": 1, "ControlType": "line_break" },\n'	end
+		cWidth = 65 * butWidth
 		cLeft = 50 + (pLeft * (cWidth + 10))
 	else
 		if (numBtn <= 8) then		-- Two columns
@@ -1259,21 +1364,17 @@ local function buildJsonButton(btnNum,btnLab,btnID,btnDur,numBtn,isChild)
 		cLeft = 50 + (pLeft * (cWidth + 10))
 	end	
 	str = str .. '{ "ControlGroup": "1", "ControlType": "button", "top": '..pTop..', "left": '..pLeft..','
-	if (luup.version_major >= 7) then
-		if (luup.version_major >= 7) and (luup.version_minor < 4) then
-			-- Not supported prior 7.05
-		elseif (butWidth ~= 1) then
-			str = str .. '"HorizontalMultiplier": "'..butWidth..'",'
-		end
+	if (butWidth ~= 1) and (utils.GetUI() >= utils.IsUI7) then
+		str = str .. '"HorizontalMultiplier": "'..butWidth..'",'
 	end
 	str = str .. '\n"Label": { "text": "'..btnLab..'" },\n'
 	if (isChild == false) then
-		str = str .. '"Display": { "Service": "'..HData.SID..'", "Variable": "CurrentActivityID", "Value": "'..btnID..'", "Top": '..cTop..', "Left": '..cLeft..', "Width": '..cWidth..', "Height": 20 },\n'
-		str = str .. '"Command": { "Service": "'..HData.SID..'", "Action": "StartActivity", "Parameters": [{ "Name": "newActivityID", "Value": "'..btnID..'" }] },\n'
+		str = str .. '"Display": { "Service": "'..HData.SIDS.MODULE..'", "Variable": "CurrentActivityID", "Value": "'..btnID..'", "Top": '..cTop..', "Left": '..cLeft..', "Width": '..cWidth..', "Height": 20 },\n'
+		str = str .. '"Command": { "Service": "'..HData.SIDS.MODULE..'", "Action": "StartActivity", "Parameters": [{ "Name": "newActivityID", "Value": "'..btnID..'" }] },\n'
 	else
 		if btnDur == '' then btnDur = 0 end
-		str = str .. '"Display": { "Service": "'..HData.CHSID..'", "Variable": "LastDeviceCommand", "Value": "'..btnID..'", "Top": '..cTop..', "Left": '..cLeft..', "Width": '..cWidth..', "Height": 20 },\n'
-		str = str .. '"Command": { "Service": "'..HData.CHSID..'", "Action": "SendDeviceCommand", "Parameters": [{ "Name": "Command", "Value": "'..btnID..'"},{  "Name": "Duration", "Value": "'..btnDur..'" }] },\n'
+		str = str .. '"Display": { "Service": "'..HData.SIDS.CHILD..'", "Variable": "LastDeviceCommand", "Value": "'..btnID..'", "Top": '..cTop..', "Left": '..cLeft..', "Width": '..cWidth..', "Height": 20 },\n'
+		str = str .. '"Command": { "Service": "'..HData.SIDS.CHILD..'", "Action": "SendDeviceCommand", "Parameters": [{ "Name": "Command", "Value": "'..btnID..'"},{  "Name": "Duration", "Value": "'..btnDur..'" }] },\n'
 	end
 	str = str .. '"ControlCode": "ham_button'..btnNum..'"\n}'
 	return str
@@ -1284,26 +1385,24 @@ local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
 	local maxBtn, id, lab, dur, sid
 	local numBtn = 0
 	local buttons = {}
-	if (luup.version_major >= 7) then 
+	if (utils.GetUI() >= utils.IsUI7) then 
 		maxBtn = HData.MaxButtonUI7 
-		-- V2.1 Prior 7.05 5 less buttons
-		if (not HData.onOpenLuup) and (luup.version_minor < 4) then maxBtn = maxBtn - 5 end
 	else 
 		maxBtn = HData.MaxButtonUI5 
 	end
-	if (isChild == false) then sid = HData.SID else sid = HData.CHSID end
+	if (isChild == false) then sid = HData.SIDS.MODULE else sid = HData.SIDS.CHILD end
 	-- If not new device we can read the variables for the buttons. 
 	for i = 1, maxBtn do
 		if (isChild == false) then
-			id = varGet("ActivityID"..i) or ''
-			lab = varGet("ActivityDesc"..i) or ''
+			id = var.Get("ActivityID"..i) or ''
+			lab = var.Get("ActivityDesc"..i) or ''
 			dur = 0
 		else
 			-- On first create this will be nil
 			if (childDev ~= nil) then
-				id = varGet("Command"..i,childDev,sid) or ''
-				lab = varGet("CommandDesc"..i,childDev,sid) or ''
-				dur = varGet("PrsCommand"..i,childDev,sid) or 0
+				id = var.Get("Command"..i,sid,childDev)
+				lab = var.Get("CommandDesc"..i,sid,childDev)
+				dur = var.GetNumber("PrsCommand"..i,sid,childDev)
 			else
 				id = ''
 				lab = ''
@@ -1318,10 +1417,10 @@ local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
 			buttons[numBtn].Dur = dur
 		end
 	end	
-	log('Button definitions found : ' .. numBtn,10)
+	log.Debug('Button definitions found : ' .. numBtn)
 	local path = ""
-	local remicons = varGet('RemoteImages')
-	if (remicons == "1") then 
+	local remicons = var.GetNumber('RemoteImages')
+	if (remicons == 1) then 
 		path = HData.RemoteIconURL
 	else
 		if (luup.version_major >= 7) then 
@@ -1331,7 +1430,7 @@ local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
 		end
 	end
 	-- For main device default icon is wait so it status is more clear during all reloads.
-	if (luup.version_major >= 7) then
+	if (utils.GetUI() >= utils.IsUI7) then
 		local defIcon
 		if (isChild == false) then defIcon = 'Harmony_75.png' else defIcon = 'Harmony.png' end
 		outf:write('{\n"default_icon": "'..path..defIcon..'",\n')
@@ -1348,7 +1447,7 @@ local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
 			outf:write(' ],\n')
 		end
 	end	
-	if luup.version_major < 7 then outf:write('"DisplayStatus": { "Service": "'..sid..'", "Variable": "IconSet", "MinValue": "0", "MaxValue": "4" },\n') end
+	if (utils.GetUI() < utils.IsUI7) then outf:write('"DisplayStatus": { "Service": "'..sid..'", "Variable": "IconSet", "MinValue": "0", "MaxValue": "4" },\n') end
 	-- Calculate X size of device on screen
 	local x,y,top,tab
 	if (numBtn > 6) then 
@@ -1360,7 +1459,7 @@ local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
 	outf:write('"inScene": "1",\n"ToggleButton": 1,\n"Tabs": [ {\n')
 	outf:write('"Label": { "lang_tag": "tabname_control", "text": "Control" },\n')
 	outf:write('"Position": "0",\n"TabType": "flash",\n')
-	if luup.version_major == 7 then outf:write('"TopNavigationTab": 1,\n') end
+	if (utils.GetUI() >= utils.IsUI7) then outf:write('"TopNavigationTab": 1,\n') end
 	outf:write('"ControlGroup": [ { "id": "1", "scenegroup": "1", "isSingle": "1" } ],\n')
 	-- Calculate correct SceneGroup size. Size not used in UI7.
 	if (numBtn < 5) then top = 1 else top = 0 end
@@ -1382,7 +1481,7 @@ local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
 	if (numBtn > 0) then
 		-- Add the buttons
 		for i = 1, #buttons do
-			log('Adding button ' .. i .. ', label ' .. (buttons[i].Label or 'missing'),10)
+			log.Debug('Adding button ' .. i .. ', label ' .. (buttons[i].Label or 'missing'))
 			outf:write(buildJsonButton(i,buttons[i].Label, buttons[i].ID, buttons[i].Dur, numBtn, isChild) .. ',\n')
 		end	
 	else
@@ -1396,7 +1495,7 @@ local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
 	tab = 1
 	-- Post UI7 we have a different JS UI file then prior versions.
 	local jsFile, jsPfx
-	if (luup.version_major < 7) then 
+	if (utils.GetUI() < utils.IsUI7) then 
 		jsFile = 'J_Harmony.js' 
 		jsPfx = 'ham' 
 	else
@@ -1439,7 +1538,7 @@ local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
 	outf:write(buildJsonLabel('advanced','Advanced',false,tab,'shared.js','advanced_device') ..',\n')
 	outf:write(buildJsonLabel('logs','Logs',false,tab+1,'shared.js','device_logs') ..',\n')
 	outf:write(buildJsonLabel('notifications','Notifications',false,tab+2,'shared.js','device_notifications'))
-	if (luup.version_major >= 7) then outf:write(',\n' .. buildJsonLabel('ui7_device_scenes','Scenes',false,tab+3,'shared.js','device_scenes')) end
+	if (utils.GetUI() >= utils.IsUI7) then outf:write(',\n' .. buildJsonLabel('ui7_device_scenes','Scenes',false,tab+3,'shared.js','device_scenes')) end
 	outf:write('],\n')
 	outf:write('"eventList2": [ ')
 	-- Add possible events if we have buttons as well.
@@ -1453,7 +1552,7 @@ local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
 		outf:write('"norepeat": "1","argumentList": [{ "id": 1, "dataType": "string", "allowedValueList": [\n')
 		local btnID = 0
 		for i = 1, #buttons do
-			log('Adding event ' .. i .. ', label ' .. (buttons[i].Label or 'missing'),10)
+			log.Debug('Adding event ' .. i .. ', label ' .. (buttons[i].Label or 'missing'))
 			local lab = buttons[i].Label or 'missing'
 			local val = buttons[i].ID or 'missing'
 			local str = buildJsonEvent(i,val,lab)
@@ -1468,7 +1567,7 @@ local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
 		end
 		-- Status event of On/Off
 		if (isChild == false) then
-			outf:write(',\n{ "id": 2, "label": { "lang_tag": "a_device_is_turned_on_off", "text": "A device is turned on or off"}, "serviceId": "'..HData.SWSID..'",')
+			outf:write(',\n{ "id": 2, "label": { "lang_tag": "a_device_is_turned_on_off", "text": "A device is turned on or off"}, "serviceId": "'..HData.SIDS.SP..'",')
 			outf:write('"norepeat": "1","argumentList": [{ "id": 1, "dataType": "boolean", "defaultValue": "0", "allowedValueList": [')
 			outf:write('{ "Off": "0", "HumanFriendlyText": { "lang_tag": "hft_device_turned_off", "text": "Whenever the _DEVICE_NAME_ is turned off" }},') 
 			outf:write('{ "On": "1", "HumanFriendlyText": { "lang_tag": "hft_device_turned_on", "text": "Whenever the _DEVICE_NAME_ is turned on" }}')
@@ -1477,10 +1576,10 @@ local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
 	end	
 	outf:write('],\n')
 	if (isChild == false) then
-		if (luup.version_major < 7) then outf:write('"DeviceType": "urn:schemas-rboer-com:device:Harmony'..devID..':1",\n') end
+		if (utils.GetUI() < utils.IsUI7) then outf:write('"DeviceType": "urn:schemas-rboer-com:device:Harmony'..devID..':1",\n') end
 		outf:write('"device_type": "urn:schemas-rboer-com:device:Harmony'..devID..':1"\n}\n')
 	else	
-		if (luup.version_major < 7) then outf:write('"DeviceType": "urn:schemas-rboer-com:device:HarmonyDevice'..HData.DEVICE..'_'..devID..':1",\n') end
+		if (utils.GetUI() < utils.IsUI7) then outf:write('"DeviceType": "urn:schemas-rboer-com:device:HarmonyDevice'..HData.DEVICE..'_'..devID..':1",\n') end
 		outf:write('"device_type": "urn:schemas-rboer-com:device:HarmonyDevice'..HData.DEVICE..'_'..devID..':1"\n}\n')
 	end
 	return true
@@ -1541,29 +1640,28 @@ local function Harmony_CreateCustomModeConfiguration(devID, isChild)
 	local retVal = nil
 	local numBtn = 0
 	local buttons = {}
-	if (luup.version_major >= 7) then 
+	if (utils.GetUI() >= utils.IsUI7) then 
 		maxBtn = HData.MaxButtonUI7 
-		if (not HData.onOpenLuup) and (luup.version_minor < 4) then maxBtn = maxBtn - 5 end
 	else 
 		maxBtn = HData.MaxButtonUI5 
 	end
 	if (isChild == false) then 
-		sid = HData.SID
+		sid = HData.SIDS.MODULE
 		cmd = "/StartActivity"
 		prm = "/newActivityID="
 	else 
-		sid = HData.CHSID 
+		sid = HData.SIDS.CHILD 
 		cmd = "/SendDeviceCommand"
 		prm = "/Command="
 	end
 	-- If not new device we can read the variables for the buttons. 
 	for i = 1, maxBtn do
 		if (isChild == false) then
-			id = varGet("ActivityID"..i) or ''
-			lab = varGet("ActivityDesc"..i) or ''
+			id = var.Get("ActivityID"..i) or ''
+			lab = var.Get("ActivityDesc"..i) or ''
 		else
-			id = varGet("Command"..i,devID,sid) or ''
-			lab = varGet("CommandDesc"..i,devID,sid) or ''
+			id = var.Get("Command"..i,sid,devID) or ''
+			lab = var.Get("CommandDesc"..i,sid,devID) or ''
 		end
 		if (id ~= '') and (lab ~= '') then 
 			numBtn = numBtn + 1 
@@ -1585,12 +1683,12 @@ end
 -- Update the Static JSON file to update button texts etc
 -- Input: devID = device ID
 function Harmony_UpdateButtons(devID, upgrade)
-	log('Updating buttons for Harmony device ' .. devID)
+	log.Debug('Updating buttons for Harmony device ' .. devID)
 	local upgrd
 	if (upgrade ~= nil) then upgrd = upgrade else upgrd = false end 
 	-- See if we have a device specific definition yet
 --	local dname = string.match(luup.devices[devID].device_type, ":Harmony%d+:")
-	local dname = string.match(luup.attr_get("device_type", devID), ":Harmony%d+:")
+	local dname = string.match(var.GetAttribute("device_type", devID), ":Harmony%d+:")
 	local dnum
 	if (dname ~= nil) then dnum = string.match(dname, "%d+") end
 	if (dnum ~= nil) then 
@@ -1603,21 +1701,21 @@ function Harmony_UpdateButtons(devID, upgrade)
 		make_D_file(devID,'Harmony')
 		make_JSON_file(devID,'D_Harmony',false,false)
 		local fname = "D_Harmony"..devID
-		local curname = luup.attr_get("device_file",devID)
-		if (curname ~= (fname..".xml")) then luup.attr_set("device_file",fname..".xml",devID) end
-		if (luup.version_major >= 7) then
-			curname = luup.attr_get("device_json",devID)
-			if (curname ~= (fname..".json")) then luup.attr_set("device_json", fname..".json",devID) end
+		local curname = var.GetAttribute("device_file",devID)
+		if (curname ~= (fname..".xml")) then var.SetAttribute("device_file",fname..".xml",devID) end
+		if (utils.GetUI() >= utils.IsUI7) then
+			curname = var.GetAttribute("device_json",devID)
+			if (curname ~= (fname..".json")) then var.SetAttribute("device_json", fname..".json",devID) end
 		end
 	end	
 	-- Set preset house mode options
-	if (luup.version_major >= 7) then 
+	if (utils.GetUI() >= utils.IsUI7) then 
 		local cmc = Harmony_CreateCustomModeConfiguration(devID, false)
-		if (cmc) then varSet("CustomModeConfiguration", cmc, devID, HData.HADSID) end
+		if (cmc) then var.Set("CustomModeConfiguration", cmc, HData.SIDS.HA, devID) end
 	end	
 	
 	-- Force reload for things to get picked up if requested on UI7
-	if (upgrd ~= true) then luup_reload() end
+	if (upgrd ~= true) then utils.ReloadLuup() end
 	return true
 end
 
@@ -1628,16 +1726,16 @@ function Harmony_UpdateDeviceButtons(devID, upgrade)
 	if (upgrade ~= nil) then upgrd = upgrade else upgrd = false end 
 	-- See if this gets called with the parent device ID, if so stop now to avoid issues
 	if (devID == HData.DEVICE) then
-		log('UpdateDeviceButtons called with parent ID #' .. devID .. '. Aborting..',2)
+		log.Log('UpdateDeviceButtons called with parent ID #' .. devID .. '. Aborting..',log.LLWarning)
 		return false
 	end
 	-- See if this gets called for a child this device owns when not upgrading
 	local prnt_id
 	if (upgrd ~= true) then
-		prnt_id = luup.attr_get('id_parent', devID) or ""
+		prnt_id = var.GetAttribute('id_parent', devID) or ""
 		if (prnt_id ~= "") then prnt_id = tonumber(prnt_id) end
 		if (prnt_id ~= HData.DEVICE) then
-			log('UpdateDeviceButtons called for wrong parent ID #' .. prnt_id .. '. Expected #' .. HData.DEVICE .. '. Aborting..',2)
+			log.Log('UpdateDeviceButtons called for wrong parent ID #' .. prnt_id .. '. Expected #' .. HData.DEVICE .. '. Aborting..',log.LLWarning)
 			return false
 		end
 	else
@@ -1646,15 +1744,15 @@ function Harmony_UpdateDeviceButtons(devID, upgrade)
 	end
 	
 	-- Get Harmony Device ID as that is what we use as key
-	local deviceID = varGet("DeviceID",devID,HData.CHSID)
+	local deviceID = var.Get("DeviceID",HData.SIDS.CHILD,devID)
 	if (deviceID == "") then
-		log('UpdateDeviceButtons called for unconfigured device. Aborting..',2)
+		log.Log('UpdateDeviceButtons called for unconfigured device. Aborting..',log.LLWarning)
 		return false
 	end
 	
-	log('Updating buttons of device# ' .. devID .. ' for Harmony Device ' .. deviceID)
+	log.Debug('Updating buttons of device# ' .. devID .. ' for Harmony Device ' .. deviceID)
 --	local dname = string.match(luup.devices[devID].device_type, ":HarmonyDevice"..prnt_id.."_%d+:")
-	local dname = string.match(luup.attr_get("device_type", devID), ":HarmonyDevice"..prnt_id.."_%d+:")
+	local dname = string.match(var.GetAttribute("device_type", devID), ":HarmonyDevice"..prnt_id.."_%d+:")
 	local dnum, tmp
 	if (dname ~= nil) then tmp, dnum = string.match(dname, "(%d+)_(%d+)") end
 	if (dnum ~= nil) then 
@@ -1665,41 +1763,41 @@ function Harmony_UpdateDeviceButtons(devID, upgrade)
 		make_D_file(deviceID,'HarmonyDevice',prnt_id)
 		make_JSON_file(deviceID,'D_HarmonyDevice',false,true,devID,prnt_id)
 		local fname = "D_HarmonyDevice"..prnt_id.."_"..deviceID
-		local curname = luup.attr_get("device_file",devID)
-		if (curname ~= (fname..".xml")) then luup.attr_set("device_file",fname..".xml",devID) end
-		if (luup.version_major >= 7) then
-			curname = luup.attr_get("device_json",devID)
-			if (curname ~= (fname..".json")) then luup.attr_set("device_json", fname..".json",devID) end
+		local curname = var.GetAttribute("device_file",devID)
+		if (curname ~= (fname..".xml")) then var.SetAttribute("device_file",fname..".xml",devID) end
+		if (utils.GetUI() >= utils.IsUI7) then
+			curname = var.GetAttribute("device_json",devID)
+			if (curname ~= (fname..".json")) then var.SetAttribute("device_json", fname..".json",devID) end
 		end
 	end	
 	-- Set preset house mode options
-	if (luup.version_major >= 7) then 
+	if (utils.GetUI() >= utils.IsUI7) then 
 		local cmc = Harmony_CreateCustomModeConfiguration(devID, true)
-		if (cmc) then varSet("CustomModeConfiguration", cmc, devID, HData.HADSID) end
+		if (cmc) then var.Set("CustomModeConfiguration", cmc, HData.SIDS.HA, devID) end
 	end
 	
 	-- Force reload for things to get picked up if requested on UI7
-	if (upgrd ~= true) then luup_reload() end
+	if (upgrd ~= true) then utils.ReloadLuup() end
 	return true
 end
 	
 -- Harmony_CreateChildren
 local function Harmony_CreateChildren()
-	log("Harmony_CreateChildren for device ",10)
-	local childDeviceIDs = varGet("PluginHaveChildren")
+	log.Debug("Harmony_CreateChildren for device ")
+	local childDeviceIDs = var.Get("PluginHaveChildren")
 	-- See if we have obsolete child xml or json files. If so remove them
 	if (HData.Plugin_Disabled == false) then removeObsoleteChildDeviceFiles(childDeviceIDs) end
 	if (childDeviceIDs == '') then 
 		-- Note: we must continue this routine when there are no child devices as we may have ones that need to be deleted.
-		log("No child devices to create.",10)
+		log.Log("No child devices to create.")
 	else
-		log("Child devices to create : " ..childDeviceIDs,10)
+		log.Debug("Child devices to create : " ..childDeviceIDs)
 	end
 	-- Get the list of devices from the harmony when not disabled.
 	local retStat, Devices_t 
 	if (HData.Plugin_Disabled == false) then 
 		retStat, Devices_t = Harmony_GetConfig('list_devices', "", HData.JS)
-		if retStat and (#Devices_t.devices == 0) then log("No devices returned from Harmony Hub.",10) end
+		if retStat and (#Devices_t.devices == 0) then log.Log("No devices returned from Harmony Hub.") end
 	else
 		Devices_t = {}
 		Devices_t.devices = {}
@@ -1707,11 +1805,11 @@ local function Harmony_CreateChildren()
 	end	
 	-- Failed to get devices from HUB, determine current ones from defined plugins
 	if (retStat == false) then
-		log("Failed to obtain the current devices from Hub. Hub may be off. Will analyse current Child devices")
+		log.Log("Failed to obtain the current devices from Hub. Hub may be off. Will analyse current Child devices")
 		local altidprfx = 'HAM'..HData.DEVICE..'_'
 		for k, v in pairs(luup.devices) do
-			if (v.id ~=luup.attr_get ('altid',HData.DEVICE)) and (string.sub(v.id,1,altidprfx:len()) == altidprfx) then
-				log("Found existing child device, lets save! id " .. tostring(v.id))
+			if (v.id ~=var.GetAttribute ('altid')) and (string.sub(v.id,1,altidprfx:len()) == altidprfx) then
+				log.Debug("Found existing child device, lets save! id " .. tostring(v.id))
 				local i = #Devices_t.devices + 1
 				Devices_t.devices[i] = {}
 				Devices_t.devices[i].ID = string.sub(v.id,altidprfx:len()+1)
@@ -1720,7 +1818,7 @@ local function Harmony_CreateChildren()
 		end
 	end
 	local childDevices = luup.chdev.start(HData.DEVICE)
-	local embed = (varGet("PluginEmbedChildren") == "1")
+	local embed = (var.GetNumber("PluginEmbedChildren") == 1)
 	-- Loop over devices to create child for, add extra comma for gmatch to work on last device
 	childDeviceIDs = childDeviceIDs .. ','
 	for deviceID in childDeviceIDs:gmatch("(%w+),") do
@@ -1734,7 +1832,7 @@ local function Harmony_CreateChildren()
 			end	
 		end
 		if (desc == nil) then
-			log("Error! device definitions not found on Harmony Hub for ID "..deviceID,10)
+			log.Log("Error! device definitions not found on Harmony Hub for ID "..deviceID,log.LLWarning)
 		else
 			-- See if the device specific files already exist, if not copy from base and adapt
 			local fname = 'D_HarmonyDevice'..HData.DEVICE..'_'..deviceID
@@ -1746,17 +1844,17 @@ local function Harmony_CreateChildren()
 			if f~=nil then
 				-- Found, no actions needed
 				io.close(f)
-				log('CreateChildren: Device files for '..deviceID..' exist.',10)
+				log.Debug('CreateChildren: Device files for '..deviceID..' exist.')
 			else
 				-- Not yet there, make them
-				log('CreateChildren: Making new device files.',10)
+				log.Debug('CreateChildren: Making new device files.')
 				make_D_file(deviceID,'HarmonyDevice',HData.DEVICE)
 				make_JSON_file(deviceID,'D_HarmonyDevice',false,true,nil,HData.DEVICE)
 			end
---			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.CHSID..",DeviceID=".. deviceID.."\n"..HData.CHSID..",HubName="..luup.devices[HData.DEVICE].description
-			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.CHSID..",DeviceID=".. deviceID.."\n"..HData.CHSID..",HubName="..luup.attr_get("name", HData.DEVICE)
+--			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.SIDS.CHILD..",DeviceID=".. deviceID.."\n"..HData.SIDS.CHILD..",HubName="..luup.devices[HData.DEVICE].description
+			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.SIDS.CHILD..",DeviceID=".. deviceID.."\n"..HData.SIDS.CHILD..",HubName="..var.GetAttribute("name")
 			local name = "HRM: " .. string.gsub(desc, "%s%(.+%)", "")
-			log("Child device id " .. altid .. " (" .. name .. "), number " .. deviceID,10)
+			log.Debug("Child device id " .. altid .. " (" .. name .. "), number " .. deviceID)
 			luup.chdev.append(
 		    	HData.DEVICE, 		-- parent (this device)
 		    	childDevices, 		-- pointer from above "start" call
@@ -1774,12 +1872,12 @@ end
 
 -- Finish our setup activities that take a tad too long for system start
 function Harmony_Setup()
-	log("Harmony device #" .. HData.DEVICE .. " is starting up!",10)
+	log.Log("Harmony device #" .. HData.DEVICE .. " is starting up!",log.LLInfo)
 	--	Start polling for status and HTTP request handler when set-up is successful
-	local srv = varGet("HTTPServer")
-	log("HTTPServer " .. srv,10)	
+	local srv = var.GetNumber("HTTPServer")
+	log.Debug("HTTPServer " .. srv)	
 	-- Start public handler on request
-	if (srv == "1") then luup.register_handler ("HTTP_Harmony", "Harmony".. HData.DEVICE) end
+	if (srv == 1) then luup.register_handler ("HTTP_Harmony", "Harmony".. HData.DEVICE) end
 	luup.register_handler ("HTTP_HarmonyInt", "hamGetActivities".. HData.DEVICE)
 	luup.register_handler ("HTTP_HarmonyInt", "hamGetDevices".. HData.DEVICE)
 	luup.register_handler ("HTTP_HarmonyInt", "hamGetDeviceCommands".. HData.DEVICE)
@@ -1789,228 +1887,179 @@ function Harmony_Setup()
 	-- Look for current activity to start off with
 	luup.call_delay("Harmony_PollCurrentActivity", 6, "", false)
 	-- If debug level, keep tap on memory usage too.
---	local ll = varGet("LogLevel")
---	if (ll == "10") then
-		checkMemory()
---	else
---		varSet("AppMemoryUsed", "Nop")
---	end
+	checkMemory()
 	setStatusIcon(HData.Icon.IDLE)
 	return true
 end
 
---[[
-function Harmony_registerWithAltUI()
-	-- Register with ALTUI once it is ready
-	for k, v in pairs(luup.devices) do
-		if (v.device_type == "urn:schemas-upnp-org:device:altui:1") then
-			if luup.is_ready(k) then
-				log("Found ALTUI device "..k.." registering devices.")
-				local arguments = {}
-				arguments["newDeviceType"] = "urn:schemas-rboer-com:device:Harmony"..HData.DEVICE..":1"	
---				arguments["newDeviceType"] = "urn:schemas-rboer-com:device:Harmony:1"	
-				arguments["newScriptFile"] = "J_ALTUI_Harmony.js"	
-				arguments["newDeviceDrawFunc"] = "ALTUI_HarmonyDisplays.drawHarmony"	
-				arguments["newStyleFunc"] = ""	
-				arguments["newDeviceIconFunc"] = ""	
-				arguments["newControlPanelFunc"] = ""	
-				-- Main device
-				luup.call_action(HData.ALTUI_SID, "RegisterPlugin", arguments, k)
-				-- Child devices
-				arguments["newDeviceDrawFunc"] = "ALTUI_HarmonyDisplays.drawHarmonyDevice"	
-				local childDeviceIDs = varGet("PluginHaveChildren") .. ","
-				for deviceID in childDeviceIDs:gmatch("(%w+),") do
-					arguments["newDeviceType"] = "urn:schemas-rboer-com:device:HarmonyDevice"..HData.DEVICE.."_"..deviceID..":1"	
---					arguments["newDeviceType"] = "urn:schemas-rboer-com:device:HarmonyDevice:1"	
-					luup.call_action(HData.ALTUI_SID, "RegisterPlugin", arguments, k)
-				end	
-			else
-				log("ALTUI plugin is not yet ready, retry in a bit..")
-				luup.call_delay("Harmony_registerWithAltUI", 10, "", false)
-			end
-			break
-		end
-	end
-end
-]]
-
 -- Initialize our device
 function Harmony_init(lul_device)
 	HData.DEVICE = lul_device
+	-- start Utility API's
+	log = logAPI()
+	var = varAPI()
+	utils = utilsAPI()
+	var.Initialize(HData.SIDS.MODULE, HData.DEVICE)
+	
+	var.Default("LogLevel", log.LLError)
+	log.Initialize(HData.Description, var.GetNumber("LogLevel"))
+	utils.Initialize()
+
 	SetBusy(true,false)
 	setStatusIcon(HData.Icon.WAIT)
-	log("Harmony device #" .. HData.DEVICE .. " is initializing!",3)
+	log.Log("Harmony device #" .. HData.DEVICE .. " is initializing!",log.LLInfo)
 	-- See if we are running on openLuup.
-	if (luup.version_major == 7) and (luup.version_minor == 0) then
+	log.Log("We are running on "..utils.GetUI())
+	if (utils.GetUI() == utils.IsOpenLuup) then
 		HData.onOpenLuup = true
-		log("We are running on openLuup!!")
+		log.Log("We are running on openLuup!!")
+	return true
 	end
+	
 	-- See if user disabled plug-in 
-	local isDisabled = luup.attr_get("disabled", HData.DEVICE)
-	if ((isDisabled == 1) or (isDisabled == "1")) then
-		log("Init: Plug-in version "..HData.Version.." - DISABLED",2)
+	local disabled = var.GetAttribute("disabled")
+	if (disabled == 1) then
+		log.Log("Init: Plug-in version "..HData.Version.." - DISABLED",log.LLWarning)
 		HData.Plugin_Disabled = true
 		-- Still create any child devices so we do not loose configurations.
 		Harmony_CreateChildren()
-		-- Still register with ALTUI for proper drawing
---		Harmony_registerWithAltUI()
-		varSet("LinkStatus", "Plug-in disabled")
-		varSet("LastCommand", "--")
-		varSet("LastCommandTime", "--")
+		var.Set("LinkStatus", "Plug-in disabled")
+		var.Set("LastCommand", "--")
+		var.Set("LastCommandTime", "--")
 		-- Now we are done. Mark device as disabled
 		return true, "Plug-in Disabled.", HData.Description
 	end
 
 	-- Set Alt ID on first run, may avoid issues
-	local altid = luup.attr_get('altid',HData.DEVICE) or ""
-	if (altid == "") then luup.attr_set('altid', 'HAM'..HData.DEVICE..'_CNTRL',HData.DEVICE) end
+	local altid = var.GetAttribute('altid') or ""
+	if (altid == "") then var.SetAttribute('altid', 'HAM'..HData.DEVICE..'_CNTRL') end
 	-- Make sure all (advanced) parameters are there
-	local email = defVar("Email")
-	local pwd = defVar("Password")
-	local commTimeOut = tonumber(defVar("CommTimeOut",5))
-	local syslogInfo = defVar ("Syslog")	-- send to syslog if IP address and Port 'XXX.XX.XX.XXX:YYY' (default port 514)
-	HData.LogLevel = tonumber(defVar ("LogLevel", HData.LogLevel))
-	defVar("HTTPServer", 0)
-	defVar("PollInterval",0)
-	defVar("OkInterval",3)
+	local email = var.Default("Email")
+	local pwd = var.Default("Password")
+	local commTimeOut = tonumber(var.Default("CommTimeOut",5))
+	var.Default("HTTPServer", 0)
+	var.Default("PollInterval",0)
+	var.Default("PollHomeOnly",0)
+	var.Default("OkInterval",3)
 	-- V2.15, option to wait on completion of start activity
-	local wait = (defVar("WaitOnActivityStartComplete", "1") == "1")
-	defVar("AuthorizationToken")
-	defVar("PluginHaveChildren")
-	defVar("PluginEmbedChildren", "0")
-	defVar("DefaultActivity")
+	local wait = (var.Default("WaitOnActivityStartComplete", "1") == "1")
+	var.Default("AuthorizationToken")
+	var.Default("PluginHaveChildren")
+	var.Default("PluginEmbedChildren", "0")
+	var.Default("DefaultActivity")
 	-- Do not reset the values on restart, only default when non existent
-	defVar("LinkStatus", "--")
-	defVar("LastCommand", "--")
-	defVar("LastCommandTime", "--")
-	defVar("CurrentActivityID")
-	defVar("Target", "0", HData.DEVICE, HData.SWSID)
-	defVar("Status", "0", HData.DEVICE, HData.SWSID)
+	var.Default("LinkStatus", "--")
+	var.Default("LastCommand", "--")
+	var.Default("LastCommandTime", "--")
+	var.Default("CurrentActivityID")
+	var.Default("Target", "0", HData.SIDS.SP)
+	var.Default("Status", "0", HData.SIDS.SP)
 	local forcenewjson = false
-	-- set up logging to syslog	
-	if (syslogInfo ~= '') then
-		log('Starting UDP syslog service...',7) 
-		local err
---		local syslogTag = luup.devices[HData.DEVICE].description or HData.Description 
-		local syslogTag = luup.attr_get("name",HData.DEVICE) or HData.Description 
-		HData.syslog, err = syslog_server (syslogInfo, syslogTag)
-		if (not HData.syslog) then log('UDP syslog service error: '..err,2) end
-	else 
-		HData.syslog = nil
-	end
 	-- Make sure icons are accessible when they should be, even works after factory reset or when single image link gets removed or added.
-	if (HData.onOpenLuup == false) then check_images(HData.Images) end
+	if (HData.onOpenLuup == false) then utils.CheckImages(HData.Images) end
 	-- See if we are upgrading, if so force rewrite of JSON files.
-	local version = varGet("Version")
+	local version = var.Get("Version")
 	if (version ~= HData.Version) then forcenewjson = true end
 	-- When the RemoteIcons flag changed, we must force a rewrite of the JSON files as well.
-	local remicons = varGet("RemoteImages")
-	local remiconsprv = varGet("RemoteImagesPrv")
+	local remicons = var.Get("RemoteImages")
+	local remiconsprv = var.Get("RemoteImagesPrv")
 	if (remicons ~= remiconsprv) then
-		varSet("RemoteImagesPrv",remicons)
+		var.Set("RemoteImagesPrv",remicons)
 		forcenewjson = true
 	else
 		-- Default setting. It was 1 (remote) on older versions, will be 0 (local) on new.
 		if (remicons == '') then
-			varSet("RemoteImages",0)
-			varSet("RemoteImagesPrv",0)
+			var.Set("RemoteImages",0)
+			var.Set("RemoteImagesPrv",0)
 		end	
 	end
 	if (forcenewjson == true) then
-		local ipa = luup.attr_get("ip", HData.DEVICE)
-		defVar("HubIPAddress", ipa)
+		local ipa = var.GetAttribute("ip")
+		var.Default("HubIPAddress", ipa)
 		-- Bump loglevel to monitor rewrite
-		luup.log("Force rewrite of JSON files for correct Vera software version and configuration.")
-		-- We may have some obsolete files, remove them.
-		if (HData.onOpenLuup) then
---			os.execute('rm -f '..HData.f_path ..'I_HarmonyDevice.xml')
-		else
-			os.execute('rm -f '..HData.f_path ..'D_HarmonyDevice.xml')
-			os.execute('rm -f '..HData.f_path ..'D_Harmony.xml')
---			os.execute('rm -f '..HData.f_path ..'I_HarmonyDevice.xml.lzo')  -- Don't on last UI7 version
-		end
+		log.Log("Force rewrite of JSON files for correct Vera software version and configuration.",log.LLWarning)
 		-- Set the category to switch if needed
-		local catid = luup.attr_get('category_num',HData.DEVICE) or ""
-		if (catid ~= '3') then luup.attr_set('category_num', '3',HData.DEVICE) end
+		local catid = var.GetAttribute('category_num') or ""
+		if (catid ~= '3') then var.SetAttribute('category_num', '3') end
 		-- Rewrite JSON files for main device
 		Harmony_UpdateButtons(HData.DEVICE, true)
 		-- Make default JSON for child devices D_HarmonyDevice.json
 		make_JSON_file('','D_HarmonyDevice',false,true)
-		luup.log("Rewritten files for main device # " .. HData.DEVICE)
+		log.Log("Rewritten files for main device # " .. HData.DEVICE)
 		-- Then for any child devices, as they are not yet set, we must look at altid we use.
 		removeObsoleteChildDeviceFiles()
-		local childDeviceIDs = varGet("PluginHaveChildren")
+		local childDeviceIDs = var.Get("PluginHaveChildren")
 		if (childDeviceIDs ~= "") then
 			for devNo, deviceID in pairs(luup.devices) do
 				local altid = string.match(deviceID.id, 'HAM'..HData.DEVICE..'_%d+')
-				local chdevID = varGet("DeviceID", devNo, HData.CHSID)
+				local chdevID = var.Get("DeviceID", HData.SIDS.CHILD, devNo)
 				if (altid ~= nil) then 
 					local tmp
 					tmp, altid = string.match(altid, "(%d+)_(%d+)")
 					if (chdevID == altid) then
 						Harmony_UpdateDeviceButtons(devNo,true)
-						local catid = luup.attr_get('category_num',devNo) or ""
-						if (catid ~= '3') then luup.attr_set('category_num', '3',devNo) end
-						luup.log("Rewritten files for child device # " .. devNo .. " name " .. chdevID)
+						local catid = var.GetAttribute('category_num',devNo) or ""
+						if (catid ~= '3') then var.SetAttribute('category_num', '3',devNo) end
+						log.Log("Rewritten files for child device # " .. devNo .. " name " .. chdevID)
 						-- Hide the delete button for the child devices
-						defVar("HideDeleteButton", 1, devNo, "urn:micasaverde-com:serviceId:HaDevice1")
+						var.Default("HideDeleteButton", 1, HData.SIDS.HA, devNo)
 					else
-						luup.log("Child device # " .. devNo .. " does not have a matching DeviceID set.")
+						log.Log("Child device # " .. devNo .. " does not have a matching DeviceID set.")
 					end	
 				else
 					-- See if I have older version type device that is supported by this hub
 					altid = string.match(deviceID.id, 'HAM_%d+')
 					if (altid ~= nil) then 
 						altid = string.match(altid, "%d+")
-						chdevID = varGet("DeviceID", devNo, HData.SID) 
+						chdevID = var.Get("DeviceID", HData.SIDS.MODULE, devNo) 
 						local suppchID = string.match(childDeviceIDs, chdevID)
 						if (chdevID == altid) and (chdevID == suppchID) then
 							-- Transfer values from old to new
-							luup.log("Transferring settings for child device # "..devNo..", name "..chdevID.." from Harmony to HarmonyDevice")
-							varSet("DeviceID", chdevID, devNo, HData.CHSID)
+							log.Log("Transferring settings for child device # "..devNo..", name "..chdevID.." from Harmony to HarmonyDevice")
+							var.Set("DeviceID", chdevID, HData.SIDS.CHILD, devNo)
 							for idx = 1, 24 do
-								local cmdV = varGet("Command"..idx, devNo, HData.SID)
-								local cmdD = varGet("CommandDesc"..idx, devNo, HData.SID)
+								local cmdV = var.Get("Command"..idx, HData.SIDS.MODULE, devNo)
+								local cmdD = var.Get("CommandDesc"..idx, HData.SIDS.MODULE, devNo)
 								if (cmdV ~= "") then 
-									varSet("Command"..idx, cmdV, devNo, HData.CHSID)
-									varSet("Command"..idx, "", devNo, HData.SID)
+									var.Set("Command"..idx, cmdV, HData.SIDS.CHILD, devNo)
+									var.Set("Command"..idx, "", HData.SIDS.MODULE, devNo)
 								end
 								if (cmdD ~= "") then 
-									varSet("CommandDesc"..idx, cmdD, devNo, HData.CHSID) 
+									var.Set("CommandDesc"..idx, cmdD, HData.SIDS.CHILD, devNo)
 									if (idx == 1) then
-										varSet("CommandDesc"..idx, "REFRESH", devNo, HData.SID) 
+										var.Set("CommandDesc"..idx, "REFRESH", HData.SIDS.MODULE, devNo)
 									elseif (idx == 2) then	
-										varSet("CommandDesc"..idx, "BROWSER", devNo, HData.SID) 
+										var.Set("CommandDesc"..idx, "BROWSER", HData.SIDS.MODULE, devNo)
 									else
-										varSet("CommandDesc"..idx, "", devNo, HData.SID) 
+										var.Set("CommandDesc"..idx, "", HData.SIDS.MODULE, devNo)
 									end
 								end
 							end
 							-- We should only do this once
-							varSet("DeviceID", "", devNo, HData.SID)
+							var.Set("DeviceID", "", HData.SIDS.MODULE, devNo)
 							-- Now rewrite buttons, and correct alt ID and device type
 							Harmony_UpdateDeviceButtons(devNo,true)
-							local chd_type = luup.attr_get('device_type',devNo)
-							luup.attr_set('device_type',chd_type:gsub('_'..chdevID,HData.DEVICE..'_'..chdevID),devNo)
-							luup.attr_set('altid','HAM'..HData.DEVICE..'_'..chdevID,devNo)
-							local catid = luup.attr_get('category_num',devNo) or ""
-							if (catid ~= '3') then luup.attr_set('category_num', '3',devNo) end
-							luup.log("Rewritten files for child device # " .. devNo .. " name " .. chdevID)
+							local chd_type = var.GetAttribute('device_type',devNo)
+							var.SetAttribute('device_type',chd_type:gsub('_'..chdevID,HData.DEVICE..'_'..chdevID),devNo)
+							var.SetAttribute('altid','HAM'..HData.DEVICE..'_'..chdevID,devNo)
+							local catid = var.GetAttribute('category_num',devNo) or ""
+							if (catid ~= '3') then var.SetAttribute('category_num', '3',devNo) end
+							log.Log("Rewritten files for child device # " .. devNo .. " name " .. chdevID)
 						end
 					end
 				end
 			end
 		else
-			log("No child devices.",3)
+			log.Log("No child devices.",log.LLInfo)
 		end
-		varSet("Version", HData.Version)
+		var.Set("Version", HData.Version)
 		-- Sleep for 5 secs, just in case we have multiple plug in copies that try to migrate. They must all have time to finish.
 		luup.sleep(5000)
 		-- We must reload for new files to be picked up
-		luup_reload()
+		utils.ReloadLuup()
 	else
-		varSet("Version", HData.Version)
-		log("Version is current : " .. version,3)
+		var.Set("Version", HData.Version)
+		log.Log("Version is current : " .. version,log.LLInfo)
 	end
 	-- Call to register with ALTUI
 --	luup.call_delay("Harmony_registerWithAltUI", 10, "", false)
@@ -2019,17 +2068,17 @@ function Harmony_init(lul_device)
 	-- Check that we have to parameters to get started
 	local success = true
 --	local ipa = luup.devices[HData.DEVICE].ip
---	local ipa = luup.attr_get("ip", HData.DEVICE)
-	local ipa =	defVar("HubIPAddress","")
+--	local ipa = var.GetAttribute("ip")
+	local ipa =	var.Default("HubIPAddress","")
 	local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
 	-- Some cases IP gets stuck in variable and no in attribute (openLuup or ALTUI bug)
 	if (ipAddress == nil) or (email == '') or (pwd == '') then
 		setStatusIcon(HData.Icon.ERROR)
 		SetBusy(false,false)
-		setluupfailure(1, HData.DEVICE)
+		utils.SetLuupFailure(1, HData.DEVICE)
 		return false, "Configure IP Address, email and password.", HData.Description
 	end
-	log("Using Harmony Hub: IP address " .. ipAddress, 3)
+	log.Log("Using Harmony Hub: IP address " .. ipAddress, log.LLInfo)
 	Harmony = HarmonyAPI(ipAddress, email, pwd, commTimeOut, wait)
 	if (Harmony == nil) then 
 		success = false 
@@ -2047,20 +2096,20 @@ function Harmony_init(lul_device)
 	if (Harmony == nil) then 
 		setStatusIcon(HData.Icon.ERROR)
 		SetBusy(false,false)
-		setluupfailure(2, HData.DEVICE)
+		utils.SetLuupFailure(2, HData.DEVICE)
 		return false, "Hub connection set-up failed. Check IP Address, email and password.", HData.Description
 	end	
 	--	Schedule to finish rest of start up in a few seconds
 	luup.call_delay("Harmony_Setup", 3, "", false)
-	log("Harmony Hub Control: init_module completed ",10)
-	setluupfailure(0, HData.DEVICE)
+	log.Debug("Harmony Hub Control: init_module completed ")
+	utils.SetLuupFailure(0, HData.DEVICE)
 	return true
 end
 
 -- See if we have incoming data, should not happen
 function Harmony_Incoming(lul_data)
 	if (lul_data) then
-		log("Incoming received : " .. tostring(lul_data),10)
+		log.Debug("Incoming received : " .. tostring(lul_data))
 	end
 	return true
 end
