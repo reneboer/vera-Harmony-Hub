@@ -251,7 +251,7 @@ local _LLError = 1
 local _LLWarning = 2
 local _LLInfo = 8
 local _LLDebug = 11
-local def_level = _Error
+local def_level = _LLError
 local def_prefix = ''
 local def_debug = false
 
@@ -261,7 +261,7 @@ local def_debug = false
 			def_level = 10
 		else
 			def_debug = false
-			def_level = lev
+			def_level = level
 		end
 	end	
 
@@ -310,7 +310,6 @@ local _OpenLuup = 99
 
 	-- See what system we are running on, some Vera or OpenLuup
 	local function _getui()
-	luup.log(luup.attr_get("openLuup",0))
 		if (luup.attr_get("openLuup",0) ~= nil) then
 			return _OpenLuup
 		else
@@ -1913,7 +1912,6 @@ function Harmony_init(lul_device)
 	if (utils.GetUI() == utils.IsOpenLuup) then
 		HData.onOpenLuup = true
 		log.Log("We are running on openLuup!!")
-	return true
 	end
 	
 	-- See if user disabled plug-in 
