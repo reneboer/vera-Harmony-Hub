@@ -59,6 +59,7 @@ var Harmony = (function (api) {
 	var HAM_CHSID = 'urn:rboer-com:serviceId:HarmonyDevice1';
 	var HAM_MAXBUTTONS = 25;
 	var HAM_ERR_MSG = "Error : ";
+	var bOnALTUI = false;
 
 	// Forward declaration.
     var myModule = {};
@@ -71,6 +72,10 @@ var Harmony = (function (api) {
     function _init() {
         // register to events...
         api.registerEventHandler('on_ui_cpanel_before_close', myModule, 'onBeforeCpanelClose');
+		// See if we are on ALTUI
+		if (typeof ALTUI_revision=="string") {
+			bOnALTUI = true;
+		}
     }
 	
 	// Return HTML for settings tab
@@ -493,27 +498,27 @@ var Harmony = (function (api) {
 	function htmlAddMapping(di, lb1, vr1, values, lb2, vr2, sid) {
 		try {
 			var selVal = varGet(di, vr1, sid);
-			var wdth = (typeof ALTUI_revision != 'undefined') ? 'style="width:160px;"' : '';  // Use on ALTUI
+			var wdth = (bOnALTUI) ? 'style="width:160px;"' : '';  // Use on ALTUI
 			var html = '<div class="clearfix labelInputContainer">'+
-				'<div class="pull-left inputLabel" '+wdth+'>'+lb1+'</div>'+
+				'<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" '+wdth+'>'+lb1+'</div>'+
 				'<div class="pull-left customSelectBoxContainer" style="width:160px;">'+
-				'<select id="hamID_'+vr1+di+'" class="customSelectBox" style="width:160px;">';
+				'<select id="hamID_'+vr1+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:160px;">';
 			for(var i=0;i<values.length;i++){
 				html += '<option value="'+values[i].value+'" '+((''+values[i].value==selVal)?'selected':'')+'>'+values[i].label+'</option>';
 			}
 			html += '</select>'+
 				'</div>';
-			html += '<div class="pull-left inputLabel" style="margin-left:50px; width:40px;">'+lb2+'</div>'+
+			html += '<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="margin-left:50px; width:40px;">'+lb2+'</div>'+
 				'<div class="pull-left">'+
-					'<input class="customInput" style="width:160px;" id="hamID_'+vr2+di+'" size="15" type="text" value="'+varGet(di,vr2,sid)+'">'+
+					'<input class="customInput '+((bOnALTUI) ? 'altui-ui-input form-control form-control-sm' : '')+'" style="width:160px;" id="hamID_'+vr2+di+'" size="15" type="text" value="'+varGet(di,vr2,sid)+'">'+
 				'</div>';
 			// V2.5, for Devices the key-press can be longer then just a click.	
 			if (typeof sid != 'undefined') {
 				var timeDuration = [{'value':'0','label':'Click'},{'value':'1','label':'1 Sec'},{'value':'2','label':'2 Sec'},{'value':'3','label':'3 Sec'},{'value':'4','label':'4 Sec'},{'value':'5','label':'5 Sec'},{'value':'7','label':'7 Sec'},{'value':'10','label':'10 Sec'},{'value':'15','label':'15 Sec'}];
 				var selDur = varGet(di, 'Prs'+vr1, sid);
-				html += '<div class="pull-left inputLabel" style="margin-left:50px; width:60px;">Press</div>'+
+				html += '<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="margin-left:50px; width:60px;">Press</div>'+
 				'<div class="pull-left customSelectBoxContainer" style="width:80px;">'+
-				'<select id="hamID_Prs'+vr1+di+'" class="customSelectBox" style="width:80px;">';
+				'<select id="hamID_Prs'+vr1+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:80px;">';
 				for(i=0;i<timeDuration.length;i++){
 					html += '<option value="'+timeDuration[i].value+'" '+((''+timeDuration[i].value==selDur)?'selected':'')+'>'+timeDuration[i].label+'</option>';
 				}
@@ -532,9 +537,9 @@ var Harmony = (function (api) {
 		try {
 			var selVal = varGet(di, vr);
 			var html = '<div class="clearfix labelInputContainer">'+
-				'<div class="pull-left inputLabel" style="width:280px;">'+lb+'</div>'+
+				'<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="width:280px;">'+lb+'</div>'+
 				'<div class="pull-left customSelectBoxContainer">'+
-				'<select id="hamID_'+vr+di+'" class="customSelectBox">';
+				'<select id="hamID_'+vr+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:200px;">';
 			for(var i=0;i<values.length;i++){
 				html += '<option value="'+values[i].value+'" '+((values[i].value==selVal)?'selected':'')+'>'+values[i].label+'</option>';
 			}
@@ -579,17 +584,17 @@ var Harmony = (function (api) {
 		var val = (typeof df != 'undefined') ? df : varGet(di,vr,sid);
 		var typ = (vr.toLowerCase() == 'password') ? 'type="password"' : 'type="text"';
 		var html = '<div class="clearfix labelInputContainer">'+
-					'<div class="pull-left inputLabel" style="width:280px;">'+lb+'</div>'+
+					'<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="width:280px;">'+lb+'</div>'+
 					'<div class="pull-left">'+
-						'<input class="customInput altui-ui-input form-control" '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'">'+
+						'<input class="customInput '+((bOnALTUI) ? 'altui-ui-input form-control form-control-sm' : '')+'" style="width:200px;" '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'">'+
 					'</div>'+
 				   '</div>';
 		if (vr.toLowerCase() == 'password') {
-			html += '<div class="clearfix labelInputContainer">'+
+			html += '<div class="clearfix labelInputContainer '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'">'+
 					'<div class="pull-left inputLabel" style="width:280px;">&nbsp; </div>'+
-					'<div class="pull-left">'+
-						'<input class="customCheckbox" type="checkbox" id="hamID_'+vr+di+'Checkbox">'+
-						'<label class="labelForCustomCheckbox" for="hamID_'+vr+di+'Checkbox">Show Password</label>'+
+					'<div class="pull-left '+((bOnALTUI) ? 'form-check' : '')+'" style="width:200px;">'+
+						'<input class="pull-left customCheckbox '+((bOnALTUI) ? 'form-check-input' : '')+'" type="checkbox" id="hamID_'+vr+di+'Checkbox">'+
+						'<label class="labelForCustomCheckbox '+((bOnALTUI) ? 'form-check-label' : '')+'" for="hamID_'+vr+di+'Checkbox">Show Password</label>'+
 					'</div>'+
 				   '</div>';
 			html += '<script type="text/javascript">'+
@@ -604,7 +609,7 @@ var Harmony = (function (api) {
 	// Add a Save Settings button
 	function htmlAddButton(di, cb) {
 		var html = '<div class="cpanelSaveBtnContainer labelInputContainer clearfix">'+	
-			'<input class="vBtn pull-right" type="button" value="Save Changes" onclick="Harmony.'+cb+'(\''+di+'\');"></input>'+
+			'<input class="vBtn pull-right btn" type="button" value="Save Changes" onclick="Harmony.'+cb+'(\''+di+'\');"></input>'+
 			'</div>';
 		return html;
 	}
