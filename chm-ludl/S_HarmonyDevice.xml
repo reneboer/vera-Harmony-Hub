@@ -7,7 +7,6 @@
   <serviceStateTable>
 	<stateVariable sendEvents="no">
       <name>IconSet</name>
-      <dataType>string</dataType>
       <dataType>ui4</dataType>
 	  <defaultValue>0</defaultValue>
     </stateVariable>
