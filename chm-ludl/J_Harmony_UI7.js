@@ -1,11 +1,18 @@
 //# sourceURL=J_Harmony_UI7.js
 // harmony Hub Control UI for UI7
 // Written by R.Boer. 
-// V2.20 16 March 2018
+// V2.22 17 November 2018
+//
+// V2.22 Changes:
+//		Fix for ALTUI on saving settings.
+//
+// V2.21 Changes:
+//		Suspend Poll when away has added option to only stop when CurrentActivityID is -1 (all off).
 //
 // V2.20 Changes:
 //		Support for Home poll only option.
 //  	Removed syslog support
+//		Nicer look on ALTUI
 //
 // V2.19 Changes:
 //		IP Address is now stored in normal variable, no longer in device IP attribute.
@@ -88,6 +95,7 @@ var Harmony = (function (api) {
 			var timePolls = [{'value':'0','label':'No Polling'},{'value':'5','label':'5 Sec (not recommended)'},{'value':'10','label':'10 Sec (not recommended)'},{'value':'15','label':'15 Sec'},{'value':'20','label':'20 Sec'},{'value':'30','label':'30 Sec'},{'value':'45','label':'45 Sec'},{'value':'60','label':'60 Sec'},{'value':'90','label':'90 Sec'},{'value':'120','label':'120 Sec'}];
 			var timeAck = [{'value':'0','label':'None'},{'value':'1','label':'1 Sec'},{'value':'2','label':'2 Sec'},{'value':'3','label':'3 Sec'}];
 			var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
+			var yesNoIdle = [{'value':'0','label':'No'},{'value':'1','label':'Yes'},{'value':'2','label':'Only when Inactive'}];
 			var logLevel = [{'value':'1','label':'Error'},{'value':'2','label':'Warning'},{'value':'8','label':'Info'},{'value':'11','label':'Debug'}];
 			var actSel = [{ 'value':'','label':'None'}];
 			var ip = !!deviceObj.ip ? deviceObj.ip : '';
@@ -109,7 +117,7 @@ var Harmony = (function (api) {
 				htmlAddInput(deviceID, 'Harmony Hub Password', 20, 'Password')+
 				htmlAddPulldown(deviceID, 'Harmony Hub communication time out', 'CommTimeOut', timeOuts)+
 				htmlAddPulldown(deviceID, 'Current Activity Poll Interval', 'PollInterval', timePolls)+
-				htmlAddPulldown(deviceID, 'Only Poll when Home', 'PollHomeOnly', yesNo)+
+				htmlAddPulldown(deviceID, 'Suspend Polling when not Home', 'PollHomeOnly', yesNoIdle)+
 				htmlAddPulldown(deviceID, 'Ok Acknowledge Interval', 'OkInterval', timeAck)+
 				htmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel)+
 				htmlAddPulldown(deviceID, 'Wait on Activity start complete', 'WaitOnActivityStartComplete', yesNo)+
@@ -322,8 +330,8 @@ var Harmony = (function (api) {
 		varSet(deviceID,'RemoteImages',htmlGetPulldownSelection(deviceID, 'RemoteImages'));
 		varSet(deviceID,'LogLevel',htmlGetPulldownSelection(deviceID, 'LogLevel'));
 		application.sendCommandSaveUserData(true);
-		doReload(deviceID);
 		setTimeout(function() {
+			doReload(deviceID);
 			showBusy(false);
 			try {
 				api.ui.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0);
