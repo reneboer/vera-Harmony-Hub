@@ -2,8 +2,13 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.20 16 March 2018
+	V2.28 22 December 2018
 	
+	V2.28 Changes:
+				Changes to Hub WebSocket API due to Logitech pulling the XMPP API on their 206 firmware and made it a special option in 210.
+				Seperate UI and plugin version to avoid static file rewrites on upgrades if not needed.
+	V2.21 Changes:
+				Suspend Poll when away has added option to only stop when CurrentActivityID is -1 (all off). Usefull if away/night/vacation trigger to turn all Off.				
 	V2.20 Changes:
 				Support for Home poll only option.
 				Updated for my now standard Var and Log modules.
@@ -102,7 +107,10 @@ Control the harmony Hub
 	It seems that none of the elaborate authentication is used in the Hub version I have. So only SubmitCommand is implemented.
 --]==]
 
-local socketLib = require("socket")
+local ltn12 	= require("ltn12")
+local http		= require("socket.http")
+local socket	= require("socket")
+local mime = require("mime")
 local lfs = require("lfs")
 local json = require("dkjson")
 if (type(json) == "string") then
@@ -110,10 +118,20 @@ if (type(json) == "string") then
 	json = require("harmony_json")
 end
 
+local bit = require('bit')
+if (type(bit) == "string") then
+	bit = require('bit32')
+	-- lua 5.2 / bit32 library
+	bit.rol = bit.lrotate
+	bit.ror = bit.rrotate
+end
+
 local Harmony -- Harmony API data object
+local ws_client -- Websocket API bject
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.20",
+	Version = "2.28",
+	UIVersion = "2.20",
 	DEVICE = "",
 	Description = "Harmony Control",
 	SIDS = {
@@ -275,7 +293,7 @@ local def_debug = false
 		if (def_level >= level) then
 			if (level == 10) then level = 50 end
 			local msg = (text or "no text")
-			luup.log(def_prefix .. ": " .. msg:sub(1,60), (level or 50)) 
+			luup.log(def_prefix .. ": " .. msg:sub(1,80), (level or 50)) 
 		end	
 	end	
 	
@@ -373,6 +391,448 @@ local _OpenLuup = 99
 end 
 
 
+local function wsAPI()
+	-- Local variables used.
+	local ipa = ""
+	local port =  "8088"
+	local state = 'CLOSED'
+	local is_closing = false
+	local sock
+
+	-- First bunch of function for ecnand decoding.
+	local band = bit.band
+	local bxor = bit.bxor
+	local bor = bit.bor
+	local ssub = string.sub
+	local sbyte = string.byte
+	local schar = string.char
+	local rshift = bit.rshift
+	local lshift = bit.lshift
+	local mmin = math.min
+	local mfloor = math.floor
+	local unpack = unpack or table.unpack
+	local tinsert = table.insert
+	local tconcat = table.concat
+	local mrandom = math.random
+
+	local read_n_bytes = function(str, pos, n)
+		pos = pos or 1
+		return pos+n, string.byte(str, pos, pos + n - 1)
+	end
+
+	local read_int8 = function(str, pos)
+		return read_n_bytes(str, pos, 1)
+	end
+
+	local read_int16 = function(str, pos)
+		local new_pos,a,b = read_n_bytes(str, pos, 2)
+		return new_pos, lshift(a, 8) + b
+	end
+
+	local read_int32 = function(str, pos)
+		local new_pos,a,b,c,d = read_n_bytes(str, pos, 4)
+		return new_pos,
+		lshift(a, 24) +
+		lshift(b, 16) +
+		lshift(c, 8 ) +
+		d
+	end
+
+	local pack_bytes = string.char
+
+	local write_int8 = pack_bytes
+
+	local write_int16 = function(v)
+		return pack_bytes(rshift(v, 8), band(v, 0xFF))
+	end
+
+	local write_int32 = function(v)
+		return pack_bytes(
+			band(rshift(v, 24), 0xFF),
+			band(rshift(v, 16), 0xFF),
+			band(rshift(v,  8), 0xFF),
+			band(v, 0xFF)
+		)
+	end
+
+	local base64_encode = function(data)
+		return (mime.b64(data))
+	end
+
+	local generate_key = function()
+		-- used for generate key random ops
+		math.randomseed(os.time())
+		local r1 = mrandom(0,0xfffffff)
+		local r2 = mrandom(0,0xfffffff)
+		local r3 = mrandom(0,0xfffffff)
+		local r4 = mrandom(0,0xfffffff)
+		local key = write_int32(r1)..write_int32(r2)..write_int32(r3)..write_int32(r4)
+		assert(#key==16,#key)
+		return base64_encode(key)
+	end
+  
+	local bits = function(...)
+		local n = 0
+		for _,bitn in pairs{...} do
+			n = n + 2^bitn
+		end
+		return n
+	end
+
+	local bit_7 = bits(7)
+	local bit_0_3 = bits(0,1,2,3)
+	local bit_0_6 = bits(0,1,2,3,4,5,6)
+
+	local xor_mask = function(encoded,mask,payload)
+		local transformed,transformed_arr = {},{}
+		for p=1,payload,2000 do
+			local last = mmin(p+1999,payload)
+			local original = {sbyte(encoded,p,last)}
+			for i=1,#original do
+				local j = (i-1) % 4 + 1
+				transformed[i] = bxor(original[i],mask[j])
+			end
+			local xored = schar(unpack(transformed,1,#original))
+			tinsert(transformed_arr,xored)
+		end
+		return tconcat(transformed_arr)
+	end
+
+	local encode_header_small = function(header, payload)
+		return schar(header, payload)
+	end
+
+	local encode_header_medium = function(header, payload, len)
+		return schar(header, payload, band(rshift(len, 8), 0xFF), band(len, 0xFF))
+	end
+
+	local encode_header_big = function(header, payload, high, low)
+		return schar(header, payload)..write_int32(high)..write_int32(low)
+	end
+
+	local encode = function(data,opcode)
+		local header = opcode or 1-- TEXT is default opcode
+		header = bor(header,bit_7)
+		local payload = 0
+		payload = bor(payload,bit_7)
+		local len = #data
+		local chunks = {}
+		if len < 126 then
+			payload = bor(payload,len)
+			tinsert(chunks,encode_header_small(header,payload))
+		elseif len <= 0xffff then
+			payload = bor(payload,126)
+			tinsert(chunks,encode_header_medium(header,payload,len))
+		elseif len < 2^53 then
+			local high = mfloor(len/2^32)
+			local low = len - high*2^32
+			payload = bor(payload,127)
+			tinsert(chunks,encode_header_big(header,payload,high,low))
+		end
+		local m1 = mrandom(0,0xff)
+		local m2 = mrandom(0,0xff)
+		local m3 = mrandom(0,0xff)
+		local m4 = mrandom(0,0xff)
+		local mask = {m1,m2,m3,m4}
+		tinsert(chunks,write_int8(m1,m2,m3,m4))
+		tinsert(chunks,xor_mask(data,mask,#data))
+		return tconcat(chunks)
+	end
+
+	local decode = function(encoded)
+		local encoded_bak = encoded
+		if #encoded < 2 then
+			return nil,2-#encoded
+		end
+		local pos,header,payload
+		pos,header = read_int8(encoded,1)
+		pos,payload = read_int8(encoded,pos)
+		local high,low
+		encoded = ssub(encoded,pos)
+		local bytes = 2
+		local fin = band(header,bit_7) > 0
+		local opcode = band(header,bit_0_3)
+		local mask = band(payload,bit_7) > 0
+		payload = band(payload,bit_0_6)
+		if payload > 125 then
+			if payload == 126 then
+				if #encoded < 2 then
+					return nil,2-#encoded
+				end
+				pos,payload = read_int16(encoded,1)
+			elseif payload == 127 then
+				if #encoded < 8 then
+					return nil,8-#encoded
+				end
+				pos,high = read_int32(encoded,1)
+				pos,low = read_int32(encoded,pos)
+				payload = high*2^32 + low
+				if payload < 0xffff or payload > 2^53 then
+					assert(false,'INVALID PAYLOAD '..payload)
+				end
+			else
+				assert(false,'INVALID PAYLOAD '..payload)
+			end
+			encoded = ssub(encoded,pos)
+			bytes = bytes + pos - 1
+		end
+		local decoded
+		if mask then
+			local bytes_short = payload + 4 - #encoded
+			if bytes_short > 0 then
+				return nil,bytes_short
+			end
+			local m1,m2,m3,m4
+			pos,m1 = read_int8(encoded,1)
+			pos,m2 = read_int8(encoded,pos)
+			pos,m3 = read_int8(encoded,pos)
+			pos,m4 = read_int8(encoded,pos)
+			encoded = ssub(encoded,pos)
+			local mask = {
+				m1,m2,m3,m4
+			}
+			decoded = xor_mask(encoded,mask,payload)
+			bytes = bytes + 4 + payload
+		else
+			local bytes_short = payload - #encoded
+			if bytes_short > 0 then
+				return nil,bytes_short
+			end
+			if #encoded > payload then
+				decoded = ssub(encoded,1,payload)
+			else
+				decoded = encoded
+			end
+			bytes = bytes + payload
+		end
+		return decoded,fin,opcode,encoded_bak:sub(bytes+1),mask
+	end
+
+	local encode_close = function(code,reason)
+		if code then
+			local data = write_int16(code)
+			if reason then
+				data = data..tostring(reason)
+			end
+			return data
+		end
+		return ''
+	end
+
+	local decode_close = function(data)
+		local _,code,reason
+		if data then
+			if #data > 1 then
+				_,code = read_int16(data,1)
+			end
+			if #data > 2 then
+				reason = data:sub(3)
+			end
+		end
+		return code,reason
+	end
+
+	local upgrade_request = function(req)
+		local format = string.format
+		local lines = {
+			format('GET %s HTTP/1.1',req.uri or ''),
+			format('Host: %s',req.host),
+				'Upgrade: websocket',
+				'Connection: Upgrade',
+			format('Sec-WebSocket-Key: %s',req.key),
+				'Sec-WebSocket-Version: 13',
+		}
+		if req.origin then
+			tinsert(lines,string.format('Origin: %s',req.origin))
+		end
+		if req.port and req.port ~= 80 then
+			lines[2] = format('Host: %s:%d',req.host,req.port)
+		end
+		tinsert(lines,'\r\n')
+		return table.concat(lines,'\r\n')
+	end
+
+	local http_headers = function(request)
+		local headers = {}
+		if not request:match('.*HTTP/1%.1') then
+			return headers
+		end
+		request = request:match('[^\r\n]+\r\n(.*)')
+		local empty_line
+		for line in request:gmatch('[^\r\n]*\r\n') do
+			local name,val = line:match('([^%s]+)%s*:%s*([^\r\n]+)')
+			if name and val then
+				name = name:lower()
+				if not name:match('sec%-websocket') then
+					val = val:lower()
+				end
+				if not headers[name] then
+					headers[name] = val
+				else
+					headers[name] = headers[name]..','..val
+				end
+			elseif line == '\r\n' then
+				empty_line = true
+			else
+				assert(false,line..'('..#line..')')
+			end
+		end
+		return headers,request:match('\r\n\r\n(.*)')
+	end
+
+	-- start of actual WS functions
+	local ws_receive = function()
+		if state ~= 'OPEN' and not is_closing then
+			return nil,nil,false,1006,'wrong state'
+		end
+		local first_opcode
+		local frames
+		local bytes = 3
+		local encoded = ''
+		local clean = function(was_clean,code,reason)
+		    state = 'CLOSED'
+			sock:close()
+			return nil,nil,was_clean,code,reason or 'closed'
+		end
+		while true do
+			local chunk,err = sock:receive(bytes)
+			if err then
+				return clean(false,1006,err)
+			end
+			encoded = encoded..chunk
+			local decoded,fin,opcode,_,masked = decode(encoded)
+			if masked then
+				return clean(false,1006,'Websocket receive failed: frame was not masked')
+			end
+			if decoded then
+				if opcode == 8 then
+					if not is_closing then
+						local code,reason = decode_close(decoded)
+						-- echo code
+						local msg = encode_close(code)
+						local encoded = encode(msg,8)
+						local n,err = sock:send(encoded)
+						if n == #encoded then
+							return clean(true,code,reason)
+						else
+							return clean(false,code,err)
+						end
+					else
+						return decoded,opcode
+					end
+				end
+				if not first_opcode then
+					first_opcode = opcode
+				end
+				if not fin then
+					if not frames then
+						frames = {}
+					elseif opcode ~= 0 then
+						return clean(false,1002,'protocol error')
+					end
+					bytes = 3
+					encoded = ''
+					tinsert(frames,decoded)
+				elseif not frames then
+					return decoded,first_opcode
+				else
+					tinsert(frames,decoded)
+					return tconcat(frames),first_opcode
+				end
+			else
+				assert(type(fin) == 'number' and fin > 0)
+				bytes = fin
+			end
+		end
+		assert(false,'never reach here')
+	end
+
+	local ws_close = function(code,reason)
+		if state ~= 'OPEN' then
+			return false,1006,'wrong state'
+		end
+		local msg = encode_close(code or 1000,reason)
+		local encoded = encode(msg,8)
+		local n,err = sock:send(encoded)
+		local was_clean = false
+		local code = 1005
+		local reason = ''
+		if n == #encoded then
+			is_closing = true
+			local rmsg,opcode = ws_receive()
+			if rmsg and opcode == 8 then
+				code,reason = decode_close(rmsg)
+				was_clean = true
+			end
+		else
+			reason = err
+		end
+		sock:close()
+		state = 'CLOSED'
+		return was_clean,code,reason or ''
+	end
+
+	local ws_send = function(data,opcode)
+		if state ~= 'OPEN' then
+			return nil,false,1006,'wrong state'
+		end
+		local encoded = encode(data,opcode or 1)
+		local n,err = sock:send(encoded)
+		if n ~= #encoded then
+			return nil, ws_close(1006,err)
+		end
+		return true
+	end
+
+	local ws_connect = function(host,port,uri)
+		if state ~= 'CLOSED' then
+			return nil,'wrong state',nil
+		end
+		sock = socket.tcp()
+		local _,err = sock:connect(host,port)
+		if err then
+			sock:close()
+			return nil,err,nil
+		end
+		local key = generate_key()
+		local req = upgrade_request
+			{
+				key = key,
+				host = host,
+				port = port,
+				uri = uri
+			}
+		local n,err = sock:send(req)
+		if n ~= #req then
+			return nil,err,nil
+		end
+		local resp = {}
+		repeat
+			local line,err = sock:receive('*l')
+			resp[#resp+1] = line
+			if err then
+				return nil,err,nil
+			end
+		until line == ''
+		local response = table.concat(resp,'\r\n')
+		local headers = http_headers(response)
+		state = 'OPEN'
+		return true,'',headers
+	end
+	
+	local ws_is_connected = function()
+		return state == 'OPEN', state
+	end
+
+	return {
+		connect = ws_connect,
+		close = ws_close,
+		send = ws_send,
+		receive = ws_receive,
+		is_connected = ws_is_connected
+	}
+end
+
 -- Set message in task window.
 local function task(text, mode) 
 	local mode = mode or TaskData.ERROR 
@@ -444,110 +904,157 @@ end
 -- Open connection socket to Harmony
 -- Assuming all inputs are there, no additional checking
 -- Return token connected to.
-local function HarmonyAPI(ipAddress, email, pwd, commTimeOut, wait)
-	local CommunicationPort = 5222
+local function HarmonyAPI(ipAddress, wait)
+	local CommunicationPort = 8088
 	local ERR_CD = { OK = "200", ERR = "503" }
-	local ERR_MSG = { OK = "OK", ERR = "Unknown Harmony response" }
+	local ERR_MSG = { OK = "ok", ERR = "Unknown Harmony response" }
 	local CMD_DATA = { OK = "No Data", ERR = "" }
-	local PAT_ERRCODE = { PAT = "errorcode='%d-'", DEF = "errorcode='" .. ERR_CD.OK .. "'", ST = 12, EN = -2 }
-	local PAT_ERRMSG = { PAT = "errorstring='.-'", DEF = "errorstring='" .. ERR_MSG.OK .. "'", ST = 14, EN = -2 }
---	local PAT_DATA = { PAT = "!%[CDATA%[.+%]%]></oa>", DEF = "![CDATA[" .. CMD_DATA.OK .. "]]></oa>", ST = 9, EN = -9}
-	local PAT_DATA = { PAT = "!%[CDATA%[.+%]%]>", DEF = "![CDATA[" .. CMD_DATA.OK .. "]]>", ST = 9, EN = -4}
-	local numberOfMessages = 5	-- Number of messages returned on holdAction command.
+	local numberOfMessages = 10	-- Number of messages returned on holdAction command.
 	local timestamp = 10000
-	local sock
-	local sessToken
 	local ipa = ipAddress
-	local email = email
-	local pwd = pwd
 	--V2.15 option to wait on Hub to fully complete the start of an activity or not.
 	local WaitOnActionStartComplete = wait
-	-- V2.1 Configurable time out
-	local commTimeOut = (commTimeOut or 5)
 	local isBusy = false
+	local msg_id = 0
+	local remote_id, friendly_name, email, account_id
+
 	
-	-- Get the response from the Hub. The end of the return message is identified by the respClose string.
-	local function GetHubResponse(respClose)
-		local resp = {}
-		local markLen = respClose:len()
-		local mark = 1
-		local marktab = {}
-		local cnt
-		
-		for cnt = 1, markLen do
-			marktab[cnt] = respClose:sub(cnt,cnt)
+	-- Get config information from hub. Needed to get HubID for web socket communications.
+	local function GetHubInfo()
+
+        -- Retrieve the harmony Hub information.
+        log.Debug("Retrieving Harmony Hub information.")
+        local url = 'http://'..ipa..':'..CommunicationPort..'/'
+        local request_body = '{"id":1,"cmd":"connect.discoveryinfo?get","params":{}}'
+        local headers = {
+            ['Origin']= 'http://localhost.nebula.myharmony.com',
+            ['Content-Type'] = 'application/json',
+            ['Accept'] = 'application/json',
+            ['Accept-Charset'] = 'utf-8',
+			['Content-Length'] = string.len(request_body)
+        }
+		local result = {}
+		local bdy,cde,hdrs,stts = http.request{
+			url=url, 
+			method='POST',
+			sink=ltn12.sink.table(result),
+			source = ltn12.source.string(request_body),
+			headers = headers
+		}
+		if cde == 200 then
+			local json_response = json.decode(table.concat(result))
+			_friendly_name = json_response['data']['friendlyName']
+			_remote_id = json_response['data']['remoteId']
+			_email = json_response['data']['email']
+			_account_id = json_response['data']['accountId']
+			return _remote_id, _friendly_name, _email, _account_id
+		else
+			return nil, nil, nil, nil
 		end
-		cnt = 1
-		repeat
-			s, st, par = sock:receive(1)
-			if (s) then 
-				resp[cnt] = s
-				cnt = cnt + 1
-				if (marktab[mark] == s) then
-					mark = mark + 1
+	end
+
+	-- Wait for the response for the given message ID
+	-- Max ten attempts
+	local function wait_response(msgid)
+		local maxcnt = numberOfMessages
+		while maxcnt > 1 do
+			maxcnt = maxcnt -1
+			local response, op = ws_client.receive()
+			if response then
+--log.Debug("Received response: "..response)
+				local js_res = json.decode(response)
+				if js_res.id == msgid then
+					return true, js_res
 				else
-					mark = 1
+					log.Log("response is for other message id : ",js_res.id)
 				end
-			else
-				break
-			end
-		until mark > markLen
-		return table.concat(resp)
+			end	
+		end
+		-- Should not come here
+		return false, nil
+	end
+
+	-- Send a payload request to Harmony Hub and return json response.
+	-- When resp is nil or true expect a response message
+	local function send_request(command, params, wait_for_response, msgid)
+		local format = string.format
+		local params = params or '{"verb":"get","format":"json"}'
+		local msid
+		if msgid then
+			msid = msgid
+		else
+			msg_id = msg_id+1
+			if msg_id > 999999 then msg_id = 1 end
+			msid = msg_id
+		end
+		local payload = format('{"hubId":%s,"timeout":30,"hbus":{"cmd":"%s","id":%s,"params":%s}}',remote_id,command,msid,params)
+--log.Debug("Sending command : "..payload)
+		if ws_client.send(payload) then
+			if wait_for_response ~= false then return wait_response(msid) end
+			return true, nil
+		end	
+		return false, nil
 	end
 
 	-- Open socket to Hub
 	local function Connect()
 		if ((ipa or "") == "") then log.Log("Connect, no IP Address specified ",log.LLError) return false end
-		sock = socketLib.connect(ipa, CommunicationPort)
-		if (sock == nil) then log.Log("Connect, failed to open socket to hub " .. ipa, log.LLError) return false end
-		-- V2.1 suggestion, data should normally come back faster than the default 60 seconds
-		sock:settimeout(commTimeOut)
-		return true
-	end
-
-	-- Get the token, for now user needs to enter in variable
-	local function GetAuthorizationToken()
-		return true
-	end
-
-	-- Get the Session Token using the Authentication token
-	local function GetSessionToken(authToken)
-		-- Any token seems to do at the moment, Authentication is a farce
-		var.Set("AuthorizationToken", "guest")
-		sessToken = "guest"
-		return true
-	end
-
-	-- Start communication with the Hub
-	local function StartCommunication(UserName, Password)
-		return true
+		if not remote_id then
+			remote_id, friendly_name, email, account_id = GetHubInfo(ipa,CommunicationPort)
+			if not remote_id then 
+				log.Log("Connect, failed get configuration details from hub " .. ipa, log.LLError) 
+				return false 
+			end
+			log.Debug("Hub details : "..remote_id..", "..friendly_name..", "..email..", "..account_id)
+		end	
+		if ws_client.is_connected() then
+			log.Debug("We should have websocket open")
+			return true
+		else
+			local res, prot, hdrs = ws_client.connect(ipa,CommunicationPort,"/?domain=svcs.myharmony.com&hubId="..remote_id)
+			if res then
+				local res, _ = send_request("vnd.logitech.connect/vnd.logitech.statedigest?get")
+				if res then
+					return true
+				else	
+					log.Log("Connect, failed to get statedigest hub " .. ipa, log.LLError) 
+				end
+			else	
+				log.Log("Connect, failed to open websocket to hub " .. ipa..", err "..prot, log.LLError) 
+--log.Debug("Connect, failed to open websocket to hub " .. ipa..", err "..prot) 
+			end
+			ws_client.close()
+		end	
+		return false
 	end
 
 	-- Submit the command to the Hub and process response string
 	-- Input command = Hub command, id = activity or device ID, devcmd = device command, msgwait if true wait for last message from harmony on startActivity
 	local function SubmitCommand(command, id, devcmd, msgwait, prs)
+		local format = string.format
 
 		if (isBusy) then return ERR_CD.ERR, "BUSY", "Busy with other command" end
 		isBusy = true
 		local msgcnt = 0
 		
-		local cmdStr = '<iq id="' .. sessToken .. '" from="guest" type="get"><oa xmlns="connect.logitech.com" mime="vnd.logitech.harmony/vnd.logitech.harmony.engine?'
+		local cmdStr = ""
+		local params = nil
+		local wait_resp = true
 		-- Build the command string
 		local cmd = (command or "")
 		if (cmd == 'getCurrentActivity') then
-			cmdStr = cmdStr .. 'getCurrentActivity" /></iq>'
+			cmdStr = "vnd.logitech.harmony/vnd.logitech.harmony.engine?getCurrentActivity"
 		elseif (cmd == 'startactivity') then
-			cmdStr = cmdStr .. 'startactivity">activityId=' .. id .. ':timestamp='..timestamp..'</oa></iq>'
-			msgcnt = 1
-			sock:settimeout(50)
+			cmdStr = "harmony.activityengine?runactivity"
+			params = format('{"async": "true","timestamp": 0,"args":{"rule":"start"},"activityId":"%s"}',id)
 			timestamp = timestamp + 100
 		elseif (cmd == 'config') then
-			cmdStr = cmdStr .. 'config"></oa></iq>'
+			cmdStr = "vnd.logitech.harmony/vnd.logitech.harmony.engine?config"
 		elseif (cmd == 'holdAction') then
-			cmdStr = cmdStr .. 'holdAction">action={"command"::"' .. devcmd .. '","type"::"IRCommand","deviceId"::"' .. id .. '"}:status='..(prs or 'press')..':timestamp='..timestamp..'</oa></iq>'
-			if (prs == 'press') then timestamp = timestamp + 54 else timestamp = timestamp + 100 end
-		elseif (cmd == 'holdActionInt') then
-			cmdStr = cmdStr .. 'holdAction">' .. devcmd .. ':status='..(prs or 'release')..':timestamp='..timestamp..'</oa></iq>'
+			cmdStr = "vnd.logitech.harmony/vnd.logitech.harmony.engine?holdAction"
+			local action = format('{\\"command\\":\\"%s\\",\\"type\\":\\"IRCommand\\",\\"deviceId\\":\\"%s\\"}', devcmd, id)
+			params = format('{"status":"%s","timestamp":"%s","verb":"render","action":"%s"}',prs,timestamp,action)
+			wait_resp = false
 			if (prs == 'press') then timestamp = timestamp + 54 else timestamp = timestamp + 100 end
 		else	
 			log.Log("SubmitCommand, Unknown command " .. cmd)
@@ -556,103 +1063,66 @@ local function HarmonyAPI(ipAddress, email, pwd, commTimeOut, wait)
 		end
 		if (timestamp > 90000) then timestamp = 10000 end
 		local cmdResp, msgResp, errCode, errMsg
-		local reply = sock:send(cmdStr)
-		if (not reply) then 
+		local stat, js_res = send_request(cmdStr,params,wait_resp)
+		if (not stat) then 
 			isBusy = false
-			return ERR_CD.ERR, ERR_MSG.ERR, 'failed to send command '.. cmdStr 
+			return ERR_CD.ERR, ERR_MSG.ERR, 'SubmitCommand, failed to send command : '.. cmdStr 
 		end
-		-- At holdAction the Harmony Hub closes the connection without returning data
-		local done = false
+		-- At holdAction the Harmony Hub does not return additional data
+		if (cmd == 'holdAction') then 
+			isBusy = false
+			return ERR_CD.OK, ERR_MSG.OK, CMD_DATA.OK 
+		end
+
+		-- For start activity we wait until we get confirmation it got stated
 		local starttime = os.time()
-		-- First look for the <iq/> confirmation from the hub. Should be fast
-		local ret, status, partial = sock:receive('5')
-		if ((ret or "") == '<iq/>') then 
-			-- At holdAction the Harmony Hub does not return additional data
-			if (cmd == 'holdAction') or (cmd == 'holdActionInt') then 
-				isBusy = false
-				return ERR_CD.OK, ERR_MSG.OK, CMD_DATA.OK 
-			end
-			-- V2.15 set last comand time
-			HData.LastCommandTime = starttime
-			-- V2.1 suggestion, rest of data may not come back as quickly especially for StartActivity, so minimum timeout of 30 secs in 
---			if (msgcnt == 1) then sock:settimeout(30) end
-			repeat
-				-- Check to see if we are getting a message (<me) or response (<iq)
-				local ret, status, partial = sock:receive('3')
-				if ((ret or "") == '<iq') then 
-					-- read until we got </iq> closing tag
-					local hubResp = ret .. GetHubResponse('</iq>')
-					-- Get error code, error message, and response data. Use defaults if missing
-					errCode = hubResp:match(PAT_ERRCODE.PAT) or PAT_ERRCODE.DEF
-					errMsg = hubResp:match(PAT_ERRMSG.PAT) or PAT_ERRMSG.DEF
-					cmdResp = hubResp:match(PAT_DATA.PAT) or PAT_DATA.DEF
-					errCode = errCode:sub(PAT_ERRCODE.ST,PAT_ERRCODE.EN)
-					errMsg = errMsg:sub(PAT_ERRMSG.ST,PAT_ERRMSG.EN)
-					cmdResp = cmdResp:sub(PAT_DATA.ST,PAT_DATA.EN)
-					starttime = os.time()
-					-- Look for the number of messages to expect back. V2.6 improvement.
-					if (cmd == 'startactivity') then 
-						if (cmdResp ~= CMD_DATA.OK) then
-							local dmCnt, tmCnt = 0,0
-							-- V2.15, allow for two digit (more than 9) messages to be returned.
-							local doneMsg = cmdResp:match("done=%d+")
-							local totMsg = cmdResp:match(":total=%d+")
-							if totMsg then tmCnt = tonumber(totMsg:match("%d+")) end
-							if doneMsg then dmCnt = tonumber(doneMsg:match("%d+")) end
-							-- V2.15 new option to not wait on activity fully started.
-							if (not WaitOnActionStartComplete) or (dmCnt == tmCnt) then done = true end
-						end
-					else	
-						done = true
-					end	
-				elseif ((ret or "") == '<me') then 
-					log.Debug("Get message")
-					-- get message length part, then the message
-					_ = GetHubResponse('/>')
-					msgResp = GetHubResponse('</message>')
-					if (cmd == 'startactivity') then 
-						cmdResp = msgResp:match(PAT_DATA.PAT) or PAT_DATA.DEF
-						cmdResp = cmdResp:sub(PAT_DATA.ST,PAT_DATA.EN)
-						-- V2.15 new option to not wait on activity fully started.
-						if (not WaitOnActionStartComplete) or (cmdResp == "activityId="..id) then done = true end
-					end
-					starttime = os.time()
-				else
-					-- Not sure what we are getting after the normal acknowledge, but return it
-					log.Debug("SubmitCommand, invalid response from Hub after acknowledge |" .. (ret or "") .."|")
-					errCode, errMsg, cmdResp = ERR_CD.ERR, ERR_MSG.ERR, '<iq/>' .. ( ret or "") 
+		HData.LastCommandTime = starttime
+		if WaitOnActionStartComplete and (cmd == 'startactivity') then 
+			local maxcnt = numberOfMessages
+			local done = false
+			while maxcnt > 1 do
+				maxcnt = maxcnt -1
+				if js_res.cmd == nil then
+					-- we need a command respond, get next message
+				elseif js_res.cmd == 'harmony.engine?startActivityFinished' then
+					-- Success response
+					done = true
+				elseif js_res.cmd ~= 'harmony.engine?startActivity' and js_res.cmd ~= 'harmony.engine?helpdiscretes' then
+				elseif js_res.code == 200 then
+					-- Success response
+					done = true
+				elseif js_res.code ~= 100 then
+					-- Only other option is inprocess message and we are not getting that, so fail
 					done = true
 				end	
-				-- Check for time out
-				if (done == false) and (os.difftime(os.time(), starttime) > (commTimeOut * 5)) then 
-					log.Log("SubmitCommand, time out waiting response from Hub after acknowledge : " .. ( ret or "")) 
-					errCode, errMsg, cmdResp = ERR_CD.ERR, ERR_MSG.ERR, 'timeout' 
-					done = true
+				if done then
+					isBusy = false
+					return tostring(js_res.code), js_res.msg, js_res.data
+				else
+					-- try to read next message
+					stat, js_res = wait_response(msg_id)
 				end
-			until done
-		else
-			-- Not getting the response we are assuming
-			log.Log("SubmitCommand, invalid response from Hub instead of acknowledge : " .. ( ret or "")) 
-			errCode, errMsg, cmdResp = ERR_CD.ERR, ERR_MSG.ERR, ( ret or "") 
+			end	
+			-- We should not come here
+			isBusy = false
+			return ERR_CD.ERR, ERR_MSG.ERR, 'SubmitCommand, failed to get activity start confirmation after max retries.'
 		end
-		-- V2.1 suggestion, data should normally come back faster than the default 60 seconds
-		sock:settimeout(commTimeOut)
+		-- Other command, so just return what is received from command
 		isBusy = false
-		return errCode, errMsg, cmdResp
+		return tostring(js_res.code), js_res.msg, js_res.data
 	end
 	
 	-- Close socket to Hub
 	local function Close()
-		if (sock ~= nil) then sock:close() end
-		sock = nil
+		local res, cd, reason = ws_client.close()
+		if not res then
+			log.Debug("Failed to close websocket, code: "..cd.." reason "..reason)
+		end
 		return true
 	end
 
 	return{ -- Methods
 		Connect = Connect,
-		GetAuthorizationToken = GetAuthorizationToken,
-		GetSessionToken = GetSessionToken,
-		StartCommunication = StartCommunication,
 		SubmitCommand = SubmitCommand,
 		Close = Close
 	}
@@ -682,18 +1152,18 @@ local function Harmony_cmd(cmd, id, devCmd, prs)
 	else
 		stat = '423'
 		msg = 'Failed to connect to Harmony Hub'
-		harmonyOutput = ''
+		harmonyOutput = nil
 	end
 	if (stat == '200') then
 		task("Clearing...", TaskData.SUCCESS)
 		var.Set("LinkStatus","Ok")
-		log.Debug("CMD: return value : " .. stat .. ", " .. msg .. ", " .. harmonyOutput:sub(1,50))
+		log.Debug("CMD: return value : " .. stat .. ", " .. msg)
 		return true, stat, msg, harmonyOutput
 	else
 		var.Set("LinkStatus","Error")
 		log.Log("CMD: errcode="  .. stat .. ", errmsg=" .. msg)
 		task("CMD: Failed sending command " .. cmd .. " to Harmony Hub - errorcode="  .. stat .. ", errormessage=" .. msg, TaskData.ERROR)
-		return false, stat, msg, (harmonyOutput or '')
+		return false, stat, msg, nil
 	end	
 end
 
@@ -706,7 +1176,8 @@ function Harmony_PollCurrentActivity()
 		luup.call_delay("Harmony_PollCurrentActivity", pollper, "", false)
 		local pollho = var.GetNumber("PollHomeOnly")
 		local house_mode = var.GetAttribute("Mode",0)
-		if pollho == 0 or house_mode == 1 then
+		local cur_act = var.GetNumber("CurrentActivityID")
+		if house_mode == 1 or pollho == 0 or (pollho == 2 and cur_act ~= -1) then
 			-- See if we are not polling too close to start activity. This can give false results
 			if (not GetBusy()) and (os.difftime(os.time(), HData.StartActivityBusy) > 60) then
 				local stat, actID = Harmony_GetCurrentActivtyID()
@@ -732,101 +1203,95 @@ function Harmony_GetConfig(cmd, id, fmt)
 	local message = ''
 	local dataTab = {}
 	log.Debug("GetConfig")
-	local status, cd, msg, harmonyOutput = Harmony_cmd('get_config')
+	local status, cd, msg, confg = Harmony_cmd('get_config')
 	if (status == true) then
 		SetLastCommand(cmd)
-		local confg, pos, stat=json.decode(harmonyOutput)
-		if (stat) then 
-			message = "Failed to decode GetConfig to JSON received. "
-			status = false
-		else
-			-- See what part we need to return
-			if (cmd == 'list_activities') then 
-				log.Debug("Activities found : " .. #confg.activity)
-				-- List all activities supported
-				dataTab.activities = {}
-				for i = 1, #confg.activity do
-					dataTab.activities[i] = {}
-					dataTab.activities[i].ID = confg.activity[i].id
-					dataTab.activities[i].Activity = confg.activity[i].label
-				end
-			elseif (cmd == 'list_commands') then
-				log.Debug("Devices found : " .. #confg.device)
-				-- List all Commands from all Devices supported
-				dataTab.commands = {}
-				for i = 1, #confg.device do
-					dataTab.commands[i] = {}
-					dataTab.commands[i].ID = confg.device[i].id
-					dataTab.commands[i].Device = confg.device[i].label
-					dataTab.commands[i].Functions = {}
-					for j = 1, #confg.device[i].controlGroup do
-						dataTab.commands[i].Functions[j] = {}
-						dataTab.commands[i].Functions[j].Function = confg.device[i].controlGroup[j].name
-						dataTab.commands[i].Functions[j].Commands = {}
-						for x = 1, #confg.device[i].controlGroup[j]['function'] do
-							dataTab.commands[i].Functions[j].Commands[x] = {}
-							dataTab.commands[i].Functions[j].Commands[x].Label = confg.device[i].controlGroup[j]['function'][x].label
-							dataTab.commands[i].Functions[j].Commands[x].Name = confg.device[i].controlGroup[j]['function'][x].name
-							dataTab.commands[i].Functions[j].Commands[x].Action = json.decode(confg.device[i].controlGroup[j]['function'][x].action).command
-						end
-					end	
-				end
-			elseif (cmd == 'list_devices') then 
-				log.Debug("Devices found : " .. #confg.device)
-				-- List all devices supported
-				dataTab.devices = {}
-				for i = 1, #confg.device do
-					dataTab.devices[i] = {}
-					dataTab.devices[i].ID = confg.device[i].id
-					dataTab.devices[i].Device = confg.device[i].label
-					dataTab.devices[i].Model = confg.device[i].model
-					dataTab.devices[i].Manufacturer = confg.device[i].manufacturer
-				end
-			elseif (cmd == 'list_device_commands') then
-				log.Debug("Devices found : " .. #confg.device)
-				-- List all commands supported by given device grouped by function
-				for i = 1, #confg.device do
-					if (confg.device[i].id == id) then
-						dataTab.ID = confg.device[i].id
-						dataTab.Device = confg.device[i].label
-						dataTab.Functions = {}
-						for j = 1, #confg.device[i].controlGroup do
-							dataTab.Functions[j] = {}
-							dataTab.Functions[j].Function = confg.device[i].controlGroup[j].name
-							dataTab.Functions[j].Commands = {}
-							for x = 1, #confg.device[i].controlGroup[j]['function'] do
-								dataTab.Functions[j].Commands[x] = {}
-								dataTab.Functions[j].Commands[x].Label = confg.device[i].controlGroup[j]['function'][x].label
-								dataTab.Functions[j].Commands[x].Name = confg.device[i].controlGroup[j]['function'][x].name
-								dataTab.Functions[j].Commands[x].Action = json.decode(confg.device[i].controlGroup[j]['function'][x].action).command
-							end
-						end	
-						break
-					end	
-				end
-			elseif (cmd == 'list_device_commands_shrt') then
-				log.Debug("Devices found : " .. #confg.device)
-				-- List all commands supported by given device
-				dataTab.devicecommands = {} 
-				for i = 1, #confg.device do
-					if (confg.device[i].id == id) then
-						local iCnt = 1
-						for j = 1, #confg.device[i].controlGroup do
-							for x = 1, #confg.device[i].controlGroup[j]['function'] do
-								dataTab.devicecommands[iCnt] = {} 
-								dataTab.devicecommands[iCnt].Label = confg.device[i].controlGroup[j]['function'][x].label
-								dataTab.devicecommands[iCnt].Name = confg.device[i].controlGroup[j]['function'][x].name
-								dataTab.devicecommands[iCnt].Action = json.decode(confg.device[i].controlGroup[j]['function'][x].action).command
-								iCnt = iCnt + 1
-							end
-						end
-						break
-					end	
-				end
-			elseif (cmd == 'get_config') then
-				-- List full configuration
-				dataTab = confg
+		-- See what part we need to return
+		if (cmd == 'list_activities') then 
+			log.Debug("Activities found : " .. #confg.activity)
+			-- List all activities supported
+			dataTab.activities = {}
+			for i = 1, #confg.activity do
+				dataTab.activities[i] = {}
+				dataTab.activities[i].ID = confg.activity[i].id
+				dataTab.activities[i].Activity = confg.activity[i].label
 			end
+		elseif (cmd == 'list_commands') then
+			log.Debug("Devices found : " .. #confg.device)
+			-- List all Commands from all Devices supported
+			dataTab.commands = {}
+			for i = 1, #confg.device do
+				dataTab.commands[i] = {}
+				dataTab.commands[i].ID = confg.device[i].id
+				dataTab.commands[i].Device = confg.device[i].label
+				dataTab.commands[i].Functions = {}
+				for j = 1, #confg.device[i].controlGroup do
+					dataTab.commands[i].Functions[j] = {}
+					dataTab.commands[i].Functions[j].Function = confg.device[i].controlGroup[j].name
+					dataTab.commands[i].Functions[j].Commands = {}
+					for x = 1, #confg.device[i].controlGroup[j]['function'] do
+						dataTab.commands[i].Functions[j].Commands[x] = {}
+						dataTab.commands[i].Functions[j].Commands[x].Label = confg.device[i].controlGroup[j]['function'][x].label
+						dataTab.commands[i].Functions[j].Commands[x].Name = confg.device[i].controlGroup[j]['function'][x].name
+						dataTab.commands[i].Functions[j].Commands[x].Action = json.decode(confg.device[i].controlGroup[j]['function'][x].action).command
+					end
+				end	
+			end
+		elseif (cmd == 'list_devices') then 
+			log.Debug("Devices found : " .. #confg.device)
+			-- List all devices supported
+			dataTab.devices = {}
+			for i = 1, #confg.device do
+				dataTab.devices[i] = {}
+				dataTab.devices[i].ID = confg.device[i].id
+				dataTab.devices[i].Device = confg.device[i].label
+				dataTab.devices[i].Model = confg.device[i].model
+				dataTab.devices[i].Manufacturer = confg.device[i].manufacturer
+			end
+		elseif (cmd == 'list_device_commands') then
+			log.Debug("Devices found : " .. #confg.device)
+			-- List all commands supported by given device grouped by function
+			for i = 1, #confg.device do
+				if (confg.device[i].id == id) then
+					dataTab.ID = confg.device[i].id
+					dataTab.Device = confg.device[i].label
+					dataTab.Functions = {}
+					for j = 1, #confg.device[i].controlGroup do
+						dataTab.Functions[j] = {}
+						dataTab.Functions[j].Function = confg.device[i].controlGroup[j].name
+						dataTab.Functions[j].Commands = {}
+						for x = 1, #confg.device[i].controlGroup[j]['function'] do
+							dataTab.Functions[j].Commands[x] = {}
+							dataTab.Functions[j].Commands[x].Label = confg.device[i].controlGroup[j]['function'][x].label
+							dataTab.Functions[j].Commands[x].Name = confg.device[i].controlGroup[j]['function'][x].name
+							dataTab.Functions[j].Commands[x].Action = json.decode(confg.device[i].controlGroup[j]['function'][x].action).command
+						end
+					end	
+					break
+				end	
+			end
+		elseif (cmd == 'list_device_commands_shrt') then
+			log.Debug("Devices found : " .. #confg.device)
+			-- List all commands supported by given device
+			dataTab.devicecommands = {} 
+			for i = 1, #confg.device do
+				if (confg.device[i].id == id) then
+					local iCnt = 1
+					for j = 1, #confg.device[i].controlGroup do
+						for x = 1, #confg.device[i].controlGroup[j]['function'] do
+							dataTab.devicecommands[iCnt] = {} 
+							dataTab.devicecommands[iCnt].Label = confg.device[i].controlGroup[j]['function'][x].label
+							dataTab.devicecommands[iCnt].Name = confg.device[i].controlGroup[j]['function'][x].name
+							dataTab.devicecommands[iCnt].Action = json.decode(confg.device[i].controlGroup[j]['function'][x].action).command
+							iCnt = iCnt + 1
+						end
+					end
+					break
+				end	
+			end
+		elseif (cmd == 'get_config') then
+			-- List full configuration
+			dataTab = confg
 		end
 	else
 		message = " failed to send GetConfig command...  errorcode="  .. cd .. ", errormessage=" .. msg
@@ -835,7 +1300,7 @@ function Harmony_GetConfig(cmd, id, fmt)
 	if (status == false) then 
 		log.Log("GetConfig, " .. message) 
 		dataTab.status = HData.ER 
-		dataTab.message = message .. (harmonyOutput or "")
+		dataTab.message = message
 		return false, dataTab 
 	else
 		return true, dataTab
@@ -851,7 +1316,7 @@ function Harmony_IssueDeviceCommand(devID, devCmd, devDur, hnd, fmt)
 		return true
 	end
 	local cmd = 'issue_device_command'
-	local status, harmonyOutput
+	local status, cd, msg, harmonyOutput
 	local message = ''
 	local dur = tonumber(devDur) or 0
 	local hnd = hnd or false
@@ -926,15 +1391,8 @@ function Harmony_GetCurrentActivtyID(hnd, fmt)
 	log.Debug("GetCurrentActivtyID")
 	local status, cd, msg, harmonyOutput = Harmony_cmd(cmd)
 	if (status == true) then
-		log.Debug("GetCurrentActivtyID : " .. (harmonyOutput or ""))
--- V2.10 start
---		-- Check length of reported activity, if 2 or 8
---		local ln = harmonyOutput:len()
---		if (l == 9 or ln == 15) then
---			currentActivity = harmonyOutput:match('result=(-?[0-9]*)')
-		currentActivity = harmonyOutput:match('result=(-?[0-9]*)') or ''
+		currentActivity = harmonyOutput.result or ''
 		if (tonumber(currentActivity)) then
---V2.10 end		
 			SetLastCommand(cmd)
 			log.Debug("GetCurrentActivtyID found activity : " .. currentActivity)
 			var.Set("CurrentActivityID", currentActivity)
@@ -948,13 +1406,12 @@ function Harmony_GetCurrentActivtyID(hnd, fmt)
 			end
 		else
 			message = "failed to Get Current Activity...  errorcode="  .. cd .. ", errormessage=" .. msg
-			log.Log("GetCurrentActivtyID, ERROR " .. message .. " : " .. (harmonyOutput or "")) 
--- V2.10			currentActivity = ''
+			log.Log("GetCurrentActivtyID, ERROR " .. message) 
 			status = false
 		end
 	else
 		message = "failed to Get Current Activity...  errorcode="  .. cd .. ", errormessage=" .. msg
-		log.Log("GetCurrentActivtyID, ERROR " .. message ..  " : " .. (harmonyOutput or "")) 
+		log.Log("GetCurrentActivtyID, ERROR " .. message) 
 	end	
 	if (hnd == false) then
 		-- When not called from HTTP Request handler, clear busy status
@@ -969,7 +1426,7 @@ function Harmony_GetCurrentActivtyID(hnd, fmt)
 			dataTab.message = HData.MSG_OK
 		else 
 			dataTab.status = HData.ER 
-			dataTab.message = message .. (harmonyOutput or "")
+			dataTab.message = message
 		end
 		return status, dataTab
 	end	
@@ -1039,7 +1496,7 @@ function Harmony_StartActivity(actID, hnd, fmt)
 	else
 		message = "no newActivityID specified... "
 	end	
-	if (status == false) then log.Log("StartActivity, ERROR " .. message .. (harmonyOutput or "")) end
+	if (status == false) then log.Log("StartActivity, ERROR " .. message) end
 	HData.StartActivityBusy = os.time()
 	if (hnd == false) then
 		-- When not called from HTTP Request handler, clear busy status
@@ -1050,10 +1507,10 @@ function Harmony_StartActivity(actID, hnd, fmt)
 		if (status == true) then 
 			dataTab.status = HData.OK 
 			dataTab.message = HData.MSG_OK
-			dataTab.activity = (harmonyOutput or "")
+			dataTab.activity = actID
 		else 
 			dataTab.status = HData.ER 
-			dataTab.message = message .. (harmonyOutput or "")
+			dataTab.message = message
 			dataTab.activity = ""
 		end
 		return status, dataTab
@@ -1903,7 +2360,8 @@ function Harmony_init(lul_device)
 	var.Default("LogLevel", log.LLError)
 	log.Initialize(HData.Description, var.GetNumber("LogLevel"))
 	utils.Initialize()
-
+	ws_client = wsAPI() -- 2.28b
+	
 	SetBusy(true,false)
 	setStatusIcon(HData.Icon.WAIT)
 	log.Log("Harmony device #" .. HData.DEVICE .. " is initializing!",log.LLInfo)
@@ -1932,8 +2390,8 @@ function Harmony_init(lul_device)
 	local altid = var.GetAttribute('altid') or ""
 	if (altid == "") then var.SetAttribute('altid', 'HAM'..HData.DEVICE..'_CNTRL') end
 	-- Make sure all (advanced) parameters are there
-	local email = var.Default("Email")
-	local pwd = var.Default("Password")
+--	local email = var.Default("Email")
+--	local pwd = var.Default("Password")
 	local commTimeOut = tonumber(var.Default("CommTimeOut",5))
 	var.Default("HTTPServer", 0)
 	var.Default("PollInterval",0)
@@ -1952,12 +2410,14 @@ function Harmony_init(lul_device)
 	var.Default("CurrentActivityID")
 	var.Default("Target", "0", HData.SIDS.SP)
 	var.Default("Status", "0", HData.SIDS.SP)
+	var.Default("UIVersion", "2.20")
+	var.Set("Version", HData.Version)
 	local forcenewjson = false
 	-- Make sure icons are accessible when they should be, even works after factory reset or when single image link gets removed or added.
 	if (HData.onOpenLuup == false) then utils.CheckImages(HData.Images) end
-	-- See if we are upgrading, if so force rewrite of JSON files.
-	local version = var.Get("Version")
-	if (version ~= HData.Version) then forcenewjson = true end
+	-- See if we are upgrading UI settings, if so force rewrite of JSON files.
+	local version = var.Get("UIVersion")
+	if (version ~= HData.UIVersion) then forcenewjson = true end
 	-- When the RemoteIcons flag changed, we must force a rewrite of the JSON files as well.
 	local remicons = var.Get("RemoteImages")
 	local remiconsprv = var.Get("RemoteImagesPrv")
@@ -2050,14 +2510,13 @@ function Harmony_init(lul_device)
 		else
 			log.Log("No child devices.",log.LLInfo)
 		end
-		var.Set("Version", HData.Version)
+		var.Set("UIVersion", HData.UIVersion)
 		-- Sleep for 5 secs, just in case we have multiple plug in copies that try to migrate. They must all have time to finish.
 		luup.sleep(5000)
 		-- We must reload for new files to be picked up
 		utils.ReloadLuup()
 	else
-		var.Set("Version", HData.Version)
-		log.Log("Version is current : " .. version,log.LLInfo)
+		log.Log("UIVersion is current : " .. version,log.LLInfo)
 	end
 	-- Call to register with ALTUI
 --	luup.call_delay("Harmony_registerWithAltUI", 10, "", false)
@@ -2070,24 +2529,20 @@ function Harmony_init(lul_device)
 	local ipa =	var.Default("HubIPAddress","")
 	local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
 	-- Some cases IP gets stuck in variable and no in attribute (openLuup or ALTUI bug)
-	if (ipAddress == nil) or (email == '') or (pwd == '') then
+	if (ipAddress == nil) then
 		setStatusIcon(HData.Icon.ERROR)
 		SetBusy(false,false)
 		utils.SetLuupFailure(1, HData.DEVICE)
-		return false, "Configure IP Address, email and password.", HData.Description
+		return false, "Configure IP Address.", HData.Description
 	end
 	log.Log("Using Harmony Hub: IP address " .. ipAddress, log.LLInfo)
-	Harmony = HarmonyAPI(ipAddress, email, pwd, commTimeOut, wait)
+	Harmony = HarmonyAPI(ipAddress, wait)
 	if (Harmony == nil) then 
 		success = false 
 	else
-		-- Get Authorization Token
-		success = Harmony.GetAuthorizationToken()
-		if (success) then
-			-- Get Session Token
-			success = Harmony.GetSessionToken()
-			if (success == false) then Harmony = nil end
-		else
+		-- Open connection
+		success = Harmony.Connect()
+		if (not success) then
 			Harmony = nil
 		end
 	end
