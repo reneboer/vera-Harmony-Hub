@@ -2,10 +2,13 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.28 22 December 2018
+	V2.29 27 December 2018
 	
+	V2.29 Changes:
+				Bug fix for new hub instances.
+				More complete websocket client connect function.
 	V2.28 Changes:
-				Changes to Hub WebSocket API due to Logitech pulling the XMPP API on their 206 firmware and made it a special option in 210.
+				Changes to Hub WebSocket API
 				Seperate UI and plugin version to avoid static file rewrites on upgrades if not needed.
 	V2.21 Changes:
 				Suspend Poll when away has added option to only stop when CurrentActivityID is -1 (all off). Usefull if away/night/vacation trigger to turn all Off.				
@@ -117,17 +120,14 @@ if (type(json) == "string") then
 	luup.log("Harmony warning dkjson missing, falling back to harmony_json", 2)
 	json = require("harmony_json")
 end
-
 local bit = require('bit')
 if (type(bit) == "string") then
 	bit = require('bit32')
-	-- lua 5.2 / bit32 library
-	bit.rol = bit.lrotate
-	bit.ror = bit.rrotate
 end
 
+
 local Harmony -- Harmony API data object
-local ws_client -- Websocket API bject
+local ws_client -- Websocket API object
 
 local HData = { -- Data used by Harmony Plugin
 	Version = "2.28",
@@ -389,35 +389,41 @@ local _OpenLuup = 99
 		IsOpenLuup = _OpenLuup
 	}
 end 
-
-
+--[[
+	Minimal WebSocket client API. Taken from lua-websockets library http://lipp.github.io/lua-websockets/
+	Limited to syncronous mode and only ws support.
+]]
 local function wsAPI()
 	-- Local variables used.
+	local guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+	local sv = { CLOSED = 0, OPEN = 1, IS_CLOSING = 2, ERROR = -1 }
 	local ipa = ""
 	local port =  "8088"
-	local state = 'CLOSED'
-	local is_closing = false
+	local state = sv.CLOSED
 	local sock
 
-	-- First bunch of function for ecnand decoding.
+	-- First bunch of function for en- and decoding.
 	local band = bit.band
 	local bxor = bit.bxor
 	local bor = bit.bor
+	local bnot = bit.bnot
+	local rshift = bit.rshift
+	local lshift = bit.lshift
 	local ssub = string.sub
 	local sbyte = string.byte
 	local schar = string.char
-	local rshift = bit.rshift
-	local lshift = bit.lshift
+	local srep = string.rep
+	local format = string.format
 	local mmin = math.min
 	local mfloor = math.floor
+	local mrandom = math.random
 	local unpack = unpack or table.unpack
 	local tinsert = table.insert
 	local tconcat = table.concat
-	local mrandom = math.random
-
+	
 	local read_n_bytes = function(str, pos, n)
 		pos = pos or 1
-		return pos+n, string.byte(str, pos, pos + n - 1)
+		return pos+n, sbyte(str, pos, pos + n - 1)
 	end
 
 	local read_int8 = function(str, pos)
@@ -458,7 +464,25 @@ local function wsAPI()
 	local base64_encode = function(data)
 		return (mime.b64(data))
 	end
+	
+	local M_lshift, M_rshift -- forward declare
+	function M_rshift(a,disp) -- Lua5.2 insipred
+		if disp < 0 then return M_lshift(a,-disp) end
+		return mfloor(a % 2^32 / 2^disp)
+	end
 
+	function M_lshift(a,disp) -- Lua5.2 inspired
+		if disp < 0 then return M_rshift(a,-disp) end 
+		return (a * 2^disp) % 2^32
+	end
+
+	local lrotate = function(x, disp)  -- Lua5.2 inspired
+		local disp = -disp
+		disp = disp % 32
+		local low = band(x, 2^disp-1)
+		return M_rshift(x, disp) + M_lshift(low, 32-disp)
+	end
+	
 	local generate_key = function()
 		-- used for generate key random ops
 		math.randomseed(os.time())
@@ -470,7 +494,96 @@ local function wsAPI()
 		assert(#key==16,#key)
 		return base64_encode(key)
 	end
-  
+	
+	-- from wiki article, not particularly clever impl
+	local sha1 = function(msg)
+		local h0 = 0x67452301
+		local h1 = 0xEFCDAB89
+		local h2 = 0x98BADCFE
+		local h3 = 0x10325476
+		local h4 = 0xC3D2E1F0
+	
+		local bits = #msg * 8
+		-- append b10000000
+		msg = msg..schar(0x80)
+
+		-- 64 bit length will be appended
+		local bytes = #msg + 8
+
+		-- 512 bit append stuff
+		local fill_bytes = 64 - (bytes % 64)
+		if fill_bytes ~= 64 then
+			msg = msg..srep(schar(0),fill_bytes)
+		end
+
+		-- append 64 big endian length
+		local high = mfloor(bits/2^32)
+		local low = bits - high*2^32
+		msg = msg..write_int32(high)..write_int32(low)
+
+		assert(#msg % 64 == 0,#msg % 64)
+
+		for j=1,#msg,64 do
+			local chunk = msg:sub(j,j+63)
+			assert(#chunk==64,#chunk)
+			local words = {}
+			local next = 1
+			local word
+			repeat
+				next,word = read_int32(chunk, next)
+				tinsert(words, word)
+			until next > 64
+			assert(#words==16)
+			for i=17,80 do
+				words[i] = bxor(words[i-3],words[i-8],words[i-14],words[i-16])
+				words[i] = lrotate(words[i],1)
+			end
+			local a = h0
+			local b = h1
+			local c = h2
+			local d = h3
+			local e = h4
+
+			for i=1,80 do
+				local k,f
+				if i > 0 and i < 21 then
+					f = bor(band(b,c),band(bnot(b),d))
+					k = 0x5A827999
+				elseif i > 20 and i < 41 then
+					f = bxor(b,c,d)
+					k = 0x6ED9EBA1
+				elseif i > 40 and i < 61 then
+					f = bor(band(b,c),band(b,d),band(c,d))
+					k = 0x8F1BBCDC
+				elseif i > 60 and i < 81 then
+					f = bxor(b,c,d)
+					k = 0xCA62C1D6
+				end
+
+				local temp = lrotate(a,5) + f + e + k + words[i]
+				e = d
+				d = c
+				c = lrotate(b,30)
+				b = a
+				a = temp
+			end
+	
+			h0 = h0 + a
+			h1 = h1 + b
+			h2 = h2 + c
+			h3 = h3 + d
+			h4 = h4 + e
+		end
+
+		-- necessary on sizeof(int) == 32 machines
+		h0 = band(h0,0xffffffff)
+		h1 = band(h1,0xffffffff)
+		h2 = band(h2,0xffffffff)
+		h3 = band(h3,0xffffffff)
+		h4 = band(h4,0xffffffff)
+
+		return write_int32(h0)..write_int32(h1)..write_int32(h2)..write_int32(h3)..write_int32(h4)
+	end
 	local bits = function(...)
 		local n = 0
 		for _,bitn in pairs{...} do
@@ -633,7 +746,6 @@ local function wsAPI()
 	end
 
 	local upgrade_request = function(req)
-		local format = string.format
 		local lines = {
 			format('GET %s HTTP/1.1',req.uri or ''),
 			format('Host: %s',req.host),
@@ -643,13 +755,20 @@ local function wsAPI()
 				'Sec-WebSocket-Version: 13',
 		}
 		if req.origin then
-			tinsert(lines,string.format('Origin: %s',req.origin))
+			tinsert(lines,format('Origin: %s',req.origin))
 		end
 		if req.port and req.port ~= 80 then
 			lines[2] = format('Host: %s:%d',req.host,req.port)
 		end
 		tinsert(lines,'\r\n')
-		return table.concat(lines,'\r\n')
+		return tconcat(lines,'\r\n')
+	end
+
+	local sec_websocket_accept = function(sec_websocket_key)
+		local a = sec_websocket_key..guid
+		local sha1 = sha1(a)
+		assert((#sha1 % 2) == 0)
+		return base64_encode(sha1)
 	end
 
 	local http_headers = function(request)
@@ -682,7 +801,7 @@ local function wsAPI()
 
 	-- start of actual WS functions
 	local ws_receive = function()
-		if state ~= 'OPEN' and not is_closing then
+		if state ~= sv.OPEN and state ~= sv.IS_CLOSING then
 			return nil,nil,false,1006,'wrong state'
 		end
 		local first_opcode
@@ -690,7 +809,7 @@ local function wsAPI()
 		local bytes = 3
 		local encoded = ''
 		local clean = function(was_clean,code,reason)
-		    state = 'CLOSED'
+		    state = sv.CLOSED
 			sock:close()
 			return nil,nil,was_clean,code,reason or 'closed'
 		end
@@ -703,10 +822,10 @@ local function wsAPI()
 			local decoded,fin,opcode,_,masked = decode(encoded)
 			if masked then
 				return clean(false,1006,'Websocket receive failed: frame was not masked')
-			end
+			end			
 			if decoded then
 				if opcode == 8 then
-					if not is_closing then
+					if state ~= sv.IS_CLOSING then
 						local code,reason = decode_close(decoded)
 						-- echo code
 						local msg = encode_close(code)
@@ -746,9 +865,9 @@ local function wsAPI()
 		end
 		assert(false,'never reach here')
 	end
-
+	
 	local ws_close = function(code,reason)
-		if state ~= 'OPEN' then
+		if state ~= sv.OPEN then
 			return false,1006,'wrong state'
 		end
 		local msg = encode_close(code or 1000,reason)
@@ -758,7 +877,7 @@ local function wsAPI()
 		local code = 1005
 		local reason = ''
 		if n == #encoded then
-			is_closing = true
+			state = sv.IS_CLOSING
 			local rmsg,opcode = ws_receive()
 			if rmsg and opcode == 8 then
 				code,reason = decode_close(rmsg)
@@ -768,12 +887,12 @@ local function wsAPI()
 			reason = err
 		end
 		sock:close()
-		state = 'CLOSED'
+		state = sv.CLOSED
 		return was_clean,code,reason or ''
 	end
 
 	local ws_send = function(data,opcode)
-		if state ~= 'OPEN' then
+		if state ~= sv.OPEN then
 			return nil,false,1006,'wrong state'
 		end
 		local encoded = encode(data,opcode or 1)
@@ -783,9 +902,20 @@ local function wsAPI()
 		end
 		return true
 	end
+	
+	local ws_message_waiting = function()
+		if state ~= sv.OPEN then
+			return nil,false,1006,'wrong state'
+		end
+		local list = {sock}
+		local _,_, stat = socket.select (list, nil, 1)
+		return stat ~= 'timeout'
+	end
 
-	local ws_connect = function(host,port,uri)
-		if state ~= 'CLOSED' then
+	local function ws_connect (host,port,uri)
+		ipa = host
+		port = port
+		if state ~= sv.CLOSED then
 			return nil,'wrong state',nil
 		end
 		sock = socket.tcp()
@@ -814,14 +944,19 @@ local function wsAPI()
 				return nil,err,nil
 			end
 		until line == ''
-		local response = table.concat(resp,'\r\n')
+		local response = tconcat(resp,'\r\n')
 		local headers = http_headers(response)
-		state = 'OPEN'
-		return true,'',headers
+		local expected_accept = sec_websocket_accept(key)
+		if headers['sec-websocket-accept'] ~= expected_accept then
+			local msg = 'Websocket Handshake failed: Invalid Sec-Websocket-Accept (expected %s got %s)'
+			return nil,msg:format(expected_accept,headers['sec-websocket-accept'] or 'nil'),headers
+		end
+		state = sv.OPEN
+		return true,headers['sec-websocket-protocol'],headers
 	end
-	
+
 	local ws_is_connected = function()
-		return state == 'OPEN', state
+		return state == sv.OPEN, state
 	end
 
 	return {
@@ -829,7 +964,8 @@ local function wsAPI()
 		close = ws_close,
 		send = ws_send,
 		receive = ws_receive,
-		is_connected = ws_is_connected
+		is_connected = ws_is_connected,
+		message_waiting = ws_message_waiting
 	}
 end
 
@@ -2410,7 +2546,7 @@ function Harmony_init(lul_device)
 	var.Default("CurrentActivityID")
 	var.Default("Target", "0", HData.SIDS.SP)
 	var.Default("Status", "0", HData.SIDS.SP)
-	var.Default("UIVersion", "2.20")
+	var.Default("UIVersion", "--")
 	var.Set("Version", HData.Version)
 	local forcenewjson = false
 	-- Make sure icons are accessible when they should be, even works after factory reset or when single image link gets removed or added.
@@ -2518,14 +2654,9 @@ function Harmony_init(lul_device)
 	else
 		log.Log("UIVersion is current : " .. version,log.LLInfo)
 	end
-	-- Call to register with ALTUI
---	luup.call_delay("Harmony_registerWithAltUI", 10, "", false)
---	Harmony_registerWithAltUI()
 	
 	-- Check that we have to parameters to get started
 	local success = true
---	local ipa = luup.devices[HData.DEVICE].ip
---	local ipa = var.GetAttribute("ip")
 	local ipa =	var.Default("HubIPAddress","")
 	local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
 	-- Some cases IP gets stuck in variable and no in attribute (openLuup or ALTUI bug)
@@ -2551,7 +2682,8 @@ function Harmony_init(lul_device)
 		SetBusy(false,false)
 		utils.SetLuupFailure(2, HData.DEVICE)
 		return false, "Hub connection set-up failed. Check IP Address, email and password.", HData.Description
-	end	
+	end
+
 	--	Schedule to finish rest of start up in a few seconds
 	luup.call_delay("Harmony_Setup", 3, "", false)
 	log.Debug("Harmony Hub Control: init_module completed ")
