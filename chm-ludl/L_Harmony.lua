@@ -130,7 +130,7 @@ local Harmony -- Harmony API data object
 local ws_client -- Websocket API object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.28",
+	Version = "2.29",
 	UIVersion = "2.20",
 	DEVICE = "",
 	Description = "Harmony Control",
