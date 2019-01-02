@@ -36,7 +36,7 @@
 			-- Do no accept poll interval below 10 seconds to avoid hub overload
 			local newInt = tonumber(lul_settings.newPollInterval or "0")
 			if ((newInt ~= 0) and (newInt &lt; 10)) then newInt = 10 end
-			varSet("PollInterval", newInt)
+			var.Set("PollInterval", newInt)
 			-- When not zero start polling now
 			if (newInt ~= 0) then 
 				luup.call_delay("Harmony_PollCurrentActivity", newInt, "", false)
@@ -47,7 +47,7 @@
 		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 		<name>GetPollInterval</name>
 		<run>
-			return varGet("PollInterval")
+			return var.Get("PollInterval")
 		</run>
     </action>
 	<action>
@@ -73,10 +73,10 @@
 		<name>SetTarget</name>
 		<job>
 			local newTarget = lul_settings.newTargetValue or ""
-			local curTarget = varGet("Target", HData.DEVICE, HData.SWSID)
+			local curTarget = var.Get("Target", HData.SWSID)
 			if (newTarget ~= curTarget) then
 				if (newTarget == '1') then 
-					local newActivityID = varGet('DefaultActivity') 
+					local newActivityID = var.Get('DefaultActivity') 
 					if (newActivityID ~= '') then 
 						Harmony_StartActivity(newActivityID)
 					end	
@@ -92,7 +92,7 @@
         <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
 		<name>GetTarget</name>
 		<run>
-			local val = varGet("Target", HData.DEVICE, HData.SWSID)
+			local val = var.Get("Target", HData.SWSID)
 			return val
 		</run>
     </action>
@@ -100,7 +100,7 @@
         <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
 		<name>GetStatus</name>
 		<run>
-			local val = varGet("Status", HData.DEVICE, HData.SWSID)
+			local val = var.Get("Status", HData.SWSID)
 			return val
 		</run>
     </action>
