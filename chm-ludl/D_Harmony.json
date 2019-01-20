@@ -36,7 +36,7 @@
 					"text_align": "left",
                     "Label": {
                         "lang_tag": "not_initialized",
-                        "text": "Plug in not yet initialized. Wait a moment and then Reload device and Browser."
+                        "text": "Plug-in not yet initialized. Wait a moment and then Reload device and Browser."
                     },
 					"Display": {
 						"Top": 70,

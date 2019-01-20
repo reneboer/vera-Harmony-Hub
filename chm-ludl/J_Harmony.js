@@ -1,7 +1,11 @@
 //# sourceURL=J_Harmony.js
 // harmony Hub Control UI json for UI5/UI6
 // Written by R.Boer. 
-// V2.20 16 March 2018
+// V3.0 20 January 2019
+//
+// V3.0 Changes:
+//		Changed to WebSockets API, no longer need for uid,pwd and polling settings.
+//		Activities, Devices and Commands are now in variable, no need for HTTP handler.
 //
 // V2.20 Changes:
 //		Removed syslog support
@@ -54,8 +58,6 @@ function hamSettings(deviceID) {
 	var deviceObj = get_device_obj(deviceID);
 	var devicePos = get_device_index(deviceID);
 	var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
-	var timeOuts = [{'value':'2','label':'2 Sec'},{'value':'5','label':'5 Sec (default)'},{'value':'10','label':'10 Sec'},{'value':'30','label':'30 Sec'}];
-	var timePolls = [{'value':'0','label':'No Polling'},{'value':'5','label':'5 Sec'},{'value':'10','label':'10 Sec'},{'value':'15','label':'15 Sec'},{'value':'20','label':'20 Sec'},{'value':'30','label':'30 Sec'},{'value':'45','label':'45 Sec'},{'value':'60','label':'60 Sec'},{'value':'90','label':'90 Sec'},{'value':'120','label':'120 Sec'}];
 	var timeAck = [{'value':'0','label':'None'},{'value':'1','label':'1 Sec'},{'value':'2','label':'2 Sec'},{'value':'3','label':'3 Sec'}];
 	var logLevel = [{'value':'1','label':'Error'},{'value':'2','label':'Warning'},{'value':'8','label':'Info'},{'value':'11','label':'Debug'}];
 	var actSel = [{ 'value':'','label':'None'}];
@@ -71,16 +73,9 @@ function hamSettings(deviceID) {
 	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
 		html += '<tr><td colspan="2">&nbsp;</td></tr><tr><td colspan="2">Plugin is disabled in Attributes.</td></tr>';
 	} else {		
-//		html += '<tr><td width="250">Harmony Hub IP Address</td>'+
-//		'<td><input type="text" id="device_'+deviceID+'_IP" size="30" value="'+((deviceObj.ip)?deviceObj.ip:'')+'" onChange="update_device('+deviceID+',this.value,\'jsonp.ud.devices['+devicePos+'].ip\');"></td></tr>'+
 		html+= hamhtmlAddInput(deviceID, 'Harmony Hub IP Address', 30, 'HubIPAddress')+
-		hamhtmlAddInput(deviceID, 'Harmony Hub email', 30, 'Email')+
-		hamhtmlAddInput(deviceID, 'Harmony Hub Password', 20, 'Password')+
-		hamhtmlAddPulldown(deviceID, 'Harmony Hub communication time out', 'CommTimeOut', timeOuts, true)+
-		hamhtmlAddPulldown(deviceID, 'Current Activity Poll Interval', 'PollInterval', timePolls, true)+
 		hamhtmlAddPulldown(deviceID, 'Ok Acknowledge Interval', 'OkInterval', timeAck, true)+
 		hamhtmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel, true)+
-		hamhtmlAddPulldown(deviceID, 'Wait on Activity start complete', 'WaitOnActivityStartComplete', yesNo, true)+
 		hamhtmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo, true)+
 		hamhtmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo, true)+
 		hamhtmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel, true);
@@ -92,135 +87,122 @@ function hamSettings(deviceID) {
 // Request HTML for activities tab
 function hamActivities(deviceID) {
 	var deviceObj = get_device_obj(deviceID);
+	var html = '<div id="hamID_content_AC_'+deviceID+'">'+
+		'<table width="100%" border="0"><tbody>'+
+		'<tr><td class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
+		'<tr><td>&nbsp;</td></tr>';
 	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
-		hamhtmlSetLoadMessage(deviceID,'AC','Plugin is disabled in Attributes.',true);
+		html += '<tr><td>Plugin is disabled in Attributes.</td></tr>';
 	} else {	
-		hamhtmlSetLoadMessage(deviceID, 'AC', 'Loading activities from Harmony Hub.',false);
-		hamGetInfo(deviceID, HAM_SID, 'hamGetActivities', '', hamActivitiesHandler); 
-	}	
+		var actjs = hamVarGet(deviceID,'Activities');
+		if (actjs != '') {
+			var acts = JSON.parse(actjs).activities;
+			var actSel = [{ 'value':'','label':'None'}];
+			for (var i=0; i<acts.length; i++) {
+				actSel.push({ 'value':acts[i].ID,'label':acts[i].Activity});
+			}
+			html += '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
+				'<tr><td width="140"><b>Activity mappings</b></td><td colspan="3"></td></tr>'+
+				hamhtmlAddButton(deviceID,'UpdateButtons',4)+
+				'<tr><td colspan="4">'+
+				'<div id="ham_msg">Select activities you want to be able to control and click Save Changes. <br>'+
+				'The labels should fit a button, normally 7 or 8 characters max.<br>'+
+				'A reload command may be performed automatically.</div>'+
+				'<p></td></tr>';
+			for (i=1; i<=HAM_MAXBUTTONS; i++) {
+				html += hamhtmlAddMapping(deviceID, 'Activity ID button '+i,'ActivityID'+i,actSel,'Label button '+i,'ActivityDesc'+i);
+			}
+			html += '</tbody></table>';
+		} else {
+			html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
+				'<tr><td>&nbsp;</td></tr>'+
+				'<tr><td>Activities not loaded. Click the Update Configuration button.</td></tr></table>';
+		}	
+	}
+	html += '<tr><td>&nbsp;</td></tr></tbody></table>';
+    set_panel_html(html);
 }
 
 // Return HTML for devices tab
 function hamDevices(deviceID) {
 	var deviceObj = get_device_obj(deviceID);
+	var html = '<div id="hamID_content_DH_'+deviceID+'">'+
+		'<table width="100%" border="0"><tbody>'+
+		'<tr><td class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
+		'<tr><td>&nbsp;</td></tr>';
 	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
-		hamhtmlSetLoadMessage(deviceID,'DH','Plugin is disabled in Attributes.',true);
+		html += '<tr><td>Plugin is disabled in Attributes.</td></tr>';
 	} else {	
-		hamhtmlSetLoadMessage(deviceID, 'DH', 'Loading devices from Harmony Hub.',false);
-		hamGetInfo(deviceID, HAM_SID, 'hamGetDevices', '', hamDevicesHandler); 
+		var devjs = hamVarGet(deviceID,'Devices');
+		if (devjs != '') {
+			var devs = JSON.parse(devjs).devices;
+			var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
+			var childMsg = [];
+			for (var i=0; i<devs.length; i++) {
+				childMsg.push({ 'value':devs[i].ID,'label':devs[i].Device });
+			}
+			html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
+				'<tr><td width=200><b>Device selection</b></td><td></td></tr>'+
+				hamhtmlAddButton(deviceID,'UpdateDeviceSelections',2)+
+				'<tr><td colspan="2">'+
+				'<div id="ham_msg">Select device(s) you want to be able to control and click Save Changes.<br>'+
+				'For each selected a child device will be created.<br>'+
+				'A reload command may be performed automatically.</div>'+
+				'</td></tr>'+
+				hamhtmlAddPulldownMultiple(deviceID, 'Devices to Control', 'PluginHaveChildren', childMsg)+
+				hamhtmlAddPulldown(deviceID, 'Create child devices embedded', 'PluginEmbedChildren', yesNo)+
+				'</tbody></table>';
+		} else {
+			html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
+				'<tr><td>&nbsp;</td></tr>'+
+				'<tr><td>Devices not loaded. Click the Update Configuration button.</td></tr></table>';
+		}		
 	}	
+	html += '<tr><td>&nbsp;</td></tr></tbody></table>';
+    set_panel_html(html);
 }
 
 // Return HTML for device settings tab
 function hamDeviceSettings(deviceID) {
 	var deviceObj = get_device_obj(deviceID);
+	var html = '<div id="hamID_content_DS_'+deviceID+'">'+
+		'<table width="100%" border="0"><tbody>'+
+		'<tr><td class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
+		'<tr><td>&nbsp;</td></tr>';
 	var prntObj = get_device_obj(deviceObj.id_parent);
 	if (prntObj.disabled === '1' || prntObj.disabled === 1) {
-		hamhtmlSetLoadMessage(deviceID,'DS','Plugin is disabled in Parent Attributes.',true);
+		html += '<tr><td>Plugin is disabled in Attributes.</td></tr>';
 	} else {	
-		hamhtmlSetLoadMessage(deviceID, 'DS', 'Loading device commands from Harmony Hub.',false);
-		var devID = hamVarGet(deviceID,'DeviceID', HAM_CHSID);
-		hamGetInfo(deviceID, HAM_SID, 'hamGetDeviceCommands', devID, hamDeviceSettingsHandler, deviceObj.id_parent); 
+		var cmdjs = hamVarGet(deviceID,'DeviceCommands',HAM_CHSID);
+		if (cmdjs != '') {
+			var funcs = JSON.parse(cmdjs).Functions;
+			var actSel = [{ 'value':'','label':'None'}];
+			for (var i=0; i<funcs.length; i++) {
+				actSel.push({ 'value':funcs[i].Action,'label':funcs[i].Label});
+			}
+			html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
+				'<tr><td colspan="4" class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
+				'<tr><td colspan="4"><div><b>Device Command mappings</b></div></td></tr>'+
+				hamhtmlAddButton(deviceID,'UpdateDeviceButtons',4)+
+				'<tr><td colspan="4">'+
+				'<div id="ham_msg">Select commands you want to be able to control and click Save Changes.<br>'+
+				'The labels should fit a button, normally 7 or 8 characters max.<br>'+
+				'A reload command will be performed automatically.</div>'+
+				'</td></tr>';
+			for (i=1; i<=HAM_MAXBUTTONS; i++) {
+				html += hamhtmlAddMapping(deviceID, 'Button '+i+' Command','Command'+i,actSel,'Label','CommandDesc'+i, HAM_CHSID);
+			}
+			html += '</tbody></table>';
+		} else {
+			html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
+				'<tr><td>&nbsp;</td></tr>'+
+				'<tr><td>Commands not loaded. Click the Update Configuration button in the main device.</td></tr></table>';
+		}	
 	}	
+	html += '<tr><td>&nbsp;</td></tr></tbody></table>';
+    set_panel_html(html);
 }
 
-// Build HTML for activities tab
-function hamActivitiesHandler(deviceID, result) {
-	var html = '';
-	// We should have received a JSON object.
-	if (typeof result=="object") {
-		var actSel = [{ 'value':'','label':'None'}];
-		for (var i=0; i<result.activities.length; i++) {
-			actSel.push({ 'value':result.activities[i].ID,'label':result.activities[i].Activity});
-		}
-		html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
-			'<tr><td width="140"><b>Activity mappings</b></td><td colspan="3"></td></tr>'+
-			hamhtmlAddButton(deviceID,'UpdateButtons',4)+
-			'<tr><td colspan="4">'+
-			'<div id="ham_msg">Select activities you want to be able to control and click Save Changes. <br>'+
-			'The labels should fit a button, normally 7 or 8 characters max.<br>'+
-			'A reload command may be performed automatically.</div>'+
-			'<p></td></tr>';
-		for (i=1; i<=HAM_MAXBUTTONS; i++) {
-			html += hamhtmlAddMapping(deviceID, 'Activity ID button '+i,'ActivityID'+i,actSel,'Label button '+i,'ActivityDesc'+i);
-		}
-		html += '</tbody></table>';
-	} else {
-		// Report failure to user
-		if (typeof result=="string") {
-			html = result;
-		} else {
-			html = "Unknown error occurred. Try again in a minute.";
-		}
-	}
-	document.getElementById ("hamID_content_AC_"+deviceID).innerHTML = html;
-}
-
-// Build HTML for devices tab
-function hamDevicesHandler(deviceID, result) {
-	// We should have received a JSON object.
-	var html = '';
-	if (typeof result=="object") {
-		var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
-		var childMsg = [];
-		for (var i=0; i<result.devices.length; i++) {
-			childMsg.push({ 'value':result.devices[i].ID,'label':result.devices[i].Device });
-		}
-		html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
-			'<tr><td width=200><b>Device selection</b></td><td></td></tr>'+
-			hamhtmlAddButton(deviceID,'UpdateDeviceSelections',2)+
-			'<tr><td colspan="2">'+
-			'<div id="ham_msg">Select device(s) you want to be able to control and click Save Changes.<br>'+
-			'For each selected a child device will be created.<br>'+
-			'A reload command may be performed automatically.</div>'+
-			'</td></tr>'+
-			hamhtmlAddPulldownMultiple(deviceID, 'Devices to Control', 'PluginHaveChildren', childMsg)+
-			hamhtmlAddPulldown(deviceID, 'Create child devices embedded', 'PluginEmbedChildren', yesNo)+
-			'</tbody></table>';
-	} else {
-		// Report failure to user
-		if (typeof result=="string") {
-			html = result;
-		} else {
-			html = "Unknown error occurred. Try again in a minute.";
-		}
-	}
-	document.getElementById ("hamID_content_DH_"+deviceID).innerHTML = html;
-}
-
-// Build HTML for child device settings tab
-function hamDeviceSettingsHandler(deviceID, result) {
-	var deviceObj = get_device_obj(deviceID);
-	// We should have received a JSON object.
-	var html = '';
-	if (typeof result=="object") {
-		var actSel = [{ 'value':'','label':'None'}];
-		for (var i=0; i<result.devicecommands.length; i++) {
-			actSel.push({ 'value':result.devicecommands[i].Action,'label':result.devicecommands[i].Label});
-		}
-		html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
-			'<tr><td colspan="4" class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
-			'<tr><td colspan="4"><div><b>Device Command mappings</b></div></td></tr>'+
-			hamhtmlAddButton(deviceID,'UpdateDeviceButtons',4)+
-			'<tr><td colspan="4">'+
-			'<div id="ham_msg">Select commands you want to be able to control and click Save Changes.<br>'+
-			'The labels should fit a button, normally 7 or 8 characters max.<br>'+
-			'A reload command will be performed automatically.</div>'+
-			'</td></tr>';
-		for (i=1; i<=HAM_MAXBUTTONS; i++) {
-			html += hamhtmlAddMapping(deviceID, 'Button '+i+' Command','Command'+i,actSel,'Label','CommandDesc'+i, HAM_CHSID);
-		}
-		html += '</tbody></table>';
-	} else {
-		// Report failure to user
-		if (typeof result=="string") {
-			html = result;
-		} else {
-			html = "Unknown error occurred. Try again in a minute.";
-		}
-	}
-	document.getElementById ("hamID_content_DS_"+deviceID).innerHTML = html;
-}
 
 function hamVarSet(deviceID, varID, newValue, sid) {
 //	set_device_state(deviceID,  HAM_SID, varID, newValue);
@@ -466,31 +448,6 @@ function hamhtmlAddMapping(di, lb1, vr1, values, lb2, vr2, sid) {
 function hamhtmlAddButton(di,cb,cs) {
 	html = '<tr><td align="right" colspan="'+cs+'"><input class="btn" type="button" value="Save Changes" onclick="ham'+cb+'(\''+di+'\');"></input></td></tr>';
 	return html;
-}
-
-function hamGetInfo(device, sid, what, devid, func, prnt_id) {
-	var result;
-	var devnum = (typeof prnt_id != 'undefined') ? prnt_id : device;
-	var tmstmp = new Date().getTime(); // To avoid caching issues, mainly IE.
-	new Ajax.Request(data_request_url, { 
-			method: 'get', 
-			parameters: { 
-				id: 'lr_'+what+devnum,
-				serviceId: sid,
-				DeviceNum: device,
-				timestamp: tmstmp,
-				HID: devid,
-				output_format: 'json'
-			},
-			onSuccess: function (response) { 
-				// On ALTUI the response is a JSON object already for some reason, on no=ative Vera it is not.
-				result = (typeof response.responseText=="object") ? response.responseText : response.responseText.evalJSON();
-				func(device, result);
-			},
-			onFailure: function (response) {
-				func(device, HAM_ERR_MSG+response.responseText);
-			}
-	});
 }
 
 function hamReload(deviceID) {

@@ -14,6 +14,11 @@
       <name>LastDeviceCommand</name>
       <dataType>string</dataType>
     </stateVariable>
+	<stateVariable sendEvents="no">
+      <name>Duration</name>
+      <dataType>ui4</dataType>
+	  <defaultValue>0</defaultValue>
+    </stateVariable>
   </serviceStateTable>
   <actionList>
     <action>
@@ -30,6 +35,7 @@
 			<argument>
 				<name>Duration</name>
 				<direction>in</direction>
+				<relatedStateVariable>Duration</relatedStateVariable>
 			</argument>
 		</argumentList>
 	</action>

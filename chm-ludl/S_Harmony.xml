@@ -9,34 +9,65 @@
       <name>LinkStatus</name>
       <dataType>string</dataType>
 	  <defaultValue>"-"</defaultValue>
-	  <shortCode>linkstat</shortCode>
     </stateVariable>
 	<stateVariable sendEvents="yes">
       <name>CurrentActivityID</name>
-      <dataType>string</dataType>
-	  <defaultValue>"-"</defaultValue>
-	  <shortCode>caid</shortCode>
+      <dataType>i4</dataType>
+    </stateVariable>
+	<stateVariable sendEvents="yes">
+      <name>StartingActivityID</name>
+      <dataType>i4</dataType>
     </stateVariable>
 	<stateVariable sendEvents="no">
       <name>LastCommand</name>
       <dataType>string</dataType>
-	  <defaultValue>"-"</defaultValue>
-	  <shortCode>lstcmd</shortCode>
     </stateVariable>
 	<stateVariable sendEvents="no">
       <name>LastCommandTime</name>
       <dataType>string</dataType>
-	  <defaultValue>"-"</defaultValue>
-	  <shortCode>lstcmdt</shortCode>
+    </stateVariable>
+	<stateVariable sendEvents="yes">
+      <name>activityStatus</name>
+      <dataType>ui1</dataType>
     </stateVariable>
 	<stateVariable sendEvents="no">
-      <name>PollInterval</name>
+      <name>Channel</name>
+      <dataType>ui4</dataType>
+    </stateVariable>
+	<stateVariable sendEvents="no">
+      <name>Polling</name>
+      <dataType>ui1</dataType>
+    </stateVariable>
+	<stateVariable sendEvents="no">
+      <name>DeviceID</name>
+      <dataType>string</dataType>
+    </stateVariable>
+	<stateVariable sendEvents="no">
+      <name>DeviceName</name>
+      <dataType>string</dataType>
+    </stateVariable>
+	<stateVariable sendEvents="no">
+      <name>Duration</name>
       <dataType>ui4</dataType>
 	  <defaultValue>0</defaultValue>
-	  <shortCode>pllint</shortCode>
+    </stateVariable>
+	<stateVariable sendEvents="no">
+      <name>ActivityName</name>
+      <dataType>string</dataType>
+    </stateVariable>
+	<stateVariable sendEvents="no">
+      <name>ActivityID</name>
+      <dataType>string</dataType>
+    </stateVariable>
+	<stateVariable sendEvents="no">
+      <name>findResult</name>
+      <dataType>string</dataType>
     </stateVariable>
   </serviceStateTable>
   <actionList>
+    <action>
+		<name>PowerOff</name>
+    </action>
     <action>
 		<name>StartActivity</name>
 		<argumentList>
@@ -48,37 +79,25 @@
 		</argumentList>
     </action>
     <action>
+		<name>ChangeChannel</name>
+		<argumentList>
+			<argument>
+				<name>newChannel</name>
+				<direction>in</direction>
+				<relatedStateVariable>Channel</relatedStateVariable>
+			</argument>
+		</argumentList>
+    </action>
+    <action>
 		<name>GetCurrentActivityID</name>
 		<argumentList>
 			<argument>
 				<name>currentActivityID</name>
 				<direction>out</direction>
 				<relatedStateVariable>CurrentActivityID</relatedStateVariable>
+				<retval/>
 			</argument>
 		</argumentList>
-    </action>
-    <action>
-		<name>SetPollInterval</name>
-		<argumentList>
-			<argument>
-				<name>newPollInterval</name>
-				<direction>in</direction>
-				<relatedStateVariable>PollInterval</relatedStateVariable>
-			</argument>
-		</argumentList>
-    </action>
-    <action>
-		<name>GetPollInterval</name>
-		<argumentList>
-			<argument>
-				<name>PollInterval</name>
-				<direction>out</direction>
-				<relatedStateVariable>PollInterval</relatedStateVariable>
-			</argument>
-		</argumentList>
-    </action>
-    <action>
-		<name>UpdateButtons</name>
     </action>
     <action>
 		<name>IssueDeviceCommand</name>
@@ -86,6 +105,7 @@
 			<argument>
 				<name>DeviceID</name>
 				<direction>in</direction>
+				<relatedStateVariable>DeviceID</relatedStateVariable>
 			</argument>
 			<argument>
 				<name>Command</name>
@@ -95,8 +115,85 @@
 			<argument>
 				<name>Duration</name>
 				<direction>in</direction>
+				<relatedStateVariable>Duration</relatedStateVariable>
 			</argument>
 		</argumentList>
 	</action>
+    <action>
+		<name>SetHubPolling</name>
+		<argumentList>
+			<argument>
+				<name>newPollFlag</name>
+				<direction>in</direction>
+				<relatedStateVariable>Polling</relatedStateVariable>
+			</argument>
+		</argumentList>
+    </action>
+    <action>
+		<name>FindActivityByName</name>
+		<argumentList>
+			<argument>
+				<name>ActivityName</name>
+				<direction>in</direction>
+				<relatedStateVariable>ActivityName</relatedStateVariable>
+			</argument>
+			<argument>
+				<name>retActivityID</name>
+				<direction>out</direction>
+				<relatedStateVariable>findResult</relatedStateVariable>
+			</argument>
+		</argumentList>
+    </action>
+    <action>
+		<name>FindActivityByID</name>
+		<argumentList>
+			<argument>
+				<name>ActivityID</name>
+				<direction>in</direction>
+				<relatedStateVariable>ActivityID</relatedStateVariable>
+			</argument>
+			<argument>
+				<name>retActivityName</name>
+				<direction>out</direction>
+				<relatedStateVariable>findResult</relatedStateVariable>
+			</argument>
+		</argumentList>
+    </action>
+    <action>
+		<name>FindDeviceByName</name>
+		<argumentList>
+			<argument>
+				<name>DeviceName</name>
+				<direction>in</direction>
+				<relatedStateVariable>DeviceName</relatedStateVariable>
+			</argument>
+			<argument>
+				<name>retDeviceID</name>
+				<direction>out</direction>
+				<relatedStateVariable>findResult</relatedStateVariable>
+			</argument>
+		</argumentList>
+    </action>
+    <action>
+		<name>FindDeviceByID</name>
+		<argumentList>
+			<argument>
+				<name>DeviceID</name>
+				<direction>in</direction>
+				<relatedStateVariable>DeviceID</relatedStateVariable>
+			</argument>
+			<argument>
+				<name>retDeviceName</name>
+				<direction>out</direction>
+				<relatedStateVariable>findResult</relatedStateVariable>
+			</argument>
+		</argumentList>
+    </action>
+    <action>
+		<name>UpdateButtons</name>
+    </action>
+    <action>
+		<name>ForceUpdateConfiguration</name>
+    </action>
   </actionList>
 </scpd>

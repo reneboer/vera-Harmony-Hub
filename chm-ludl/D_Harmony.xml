@@ -19,9 +19,9 @@
 		<SCPDURL>S_Harmony.xml</SCPDURL>
       </service>
       <service>
-		<serviceType>urn:schemas-upnp-org:service:SwitchPower:1</serviceType>
-		<serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
-		<SCPDURL>S_SwitchPower1.xml</SCPDURL>
+        <serviceType>urn:schemas-upnp-org:service:SwitchPower:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
+        <SCPDURL>S_SwitchPower1.xml</SCPDURL>
       </service>
 	</serviceList>
 	<implementationList>
