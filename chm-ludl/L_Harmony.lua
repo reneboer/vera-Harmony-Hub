@@ -2,16 +2,32 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V2.29 27 December 2018
+	V3.0 16 January 2019
+				to-do, add Phillips HUE support (V3.1), add media player (Sonos) functions (V3.2).
 	
+	V3.0 Changes:
+				Allow activity names instead of activity ID to start activities. Add CurrentActivity variable to reflect.
+				Allow device names instead of device ID to send commands to a device.
+				Added change channel command.
+				Added PowerOff command. (= StartActivity with activity ID -1)
+				Added SetPolling command to close & re-open connection to Hub as required.
+				(to do) update documentation that for openLuup the LUA bit libary is required. (apt-get install lua-bitop)
+				Keep connection to Hub open using ws ping, rather then close after each command to keep receiving status data from Hub.
+				Optimized winsocket code for just Hub use and minimized code.
+				Store activities and devices config. Device commands with device instance. Only send getconfig if unknown or statedigest reports new config.
+				Corrections for scenes advanced editor actions.
+				Fixes for implemented actions.
+				Changes to ALTUI_plugins.js for new lines added to config and fix for Command duration. (to do)Inform amg0.
 	V2.29 Changes:
 				Bug fix for new hub instances.
 				More complete websocket client connect function.
 	V2.28 Changes:
 				Changes to Hub WebSocket API
 				Seperate UI and plugin version to avoid static file rewrites on upgrades if not needed.
+	V2.22 Changes:
+				Test to see if we can combine with Incomming to listen to activity changes rather than polling.
 	V2.21 Changes:
-				Suspend Poll when away has added option to only stop when CurrentActivityID is -1 (all off). Usefull if away/night/vacation trigger to turn all Off.				
+				Suspend Poll when away has added option to only stop when CurrentActivityID is -1 (all off). Usefull if away/night/vacation trigger to turn all Off.
 	V2.20 Changes:
 				Support for Home poll only option.
 				Updated for my now standard Var and Log modules.
@@ -113,35 +129,33 @@ Control the harmony Hub
 local ltn12 	= require("ltn12")
 local http		= require("socket.http")
 local socket	= require("socket")
-local mime = require("mime")
-local lfs = require("lfs")
-local json = require("dkjson")
+local mime 		= require("mime")
+local lfs 		= require("lfs")
+local json 		= require("dkjson")
 if (type(json) == "string") then
 	luup.log("Harmony warning dkjson missing, falling back to harmony_json", 2)
-	json = require("harmony_json")
+	json 		= require("harmony_json")
 end
-local bit = require('bit')
+local bit 		= require('bit')
 if (type(bit) == "string") then
-	bit = require('bit32')
+	bit 		= require('bit32')
 end
-
 
 local Harmony -- Harmony API data object
-local ws_client -- Websocket API object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "2.29",
-	UIVersion = "2.20",
+	Version = "3.0",
+	UIVersion = "3.0",
 	DEVICE = "",
 	Description = "Harmony Control",
 	SIDS = {
 		MODULE = "urn:rboer-com:serviceId:Harmony1",
 		CHILD = "urn:rboer-com:serviceId:HarmonyDevice1",
---		ALTUI = "urn:upnp-org:serviceId:altui1",
 		HA = "urn:micasaverde-com:serviceId:HaDevice1",
 		SP = "urn:upnp-org:serviceId:SwitchPower1"
 		},
-	RemoteIconURL = "http://www.reneboer.demon.nl/veraimg/",
+--	RemoteIconURL = "http://www.reneboer.demon.nl/veraimg/",
+	RemoteIconURL = "https://raw.githubusercontent.com/reneboer/vera-Harmony-Hub/master/icons/",
 	UI7IconURL = "",
 	UI5IconURL = "icons\\/",
 	f_path = '/etc/cmh-ludl/',
@@ -166,16 +180,6 @@ local HData = { -- Data used by Harmony Plugin
 		ERROR = '4'		-- Red
 	},
 	Images = { 'Harmony', 'Harmony_0', 'Harmony_25', 'Harmony_50', 'Harmony_75', 'Harmony_100'	},
-	CMD = {
-		['start_activity'] = { cmd = 'startactivity', par = '"actId": "%s"', res='', c = ''},
-		['issue_device_command'] = { cmd ='holdAction', par = '"devId": "%s", "devCmd": "%s"', res='', c = '' },
-		['list_activities'] = { cmd = 'config', par = '', res = '[ "%s" ]', c = '' },
-		['list_devices'] = { cmd = 'config', par = '', res = '[ "%s" ]', c = '' },
-		['list_commands'] = { cmd = 'config', par = '', res = '[ "%s" ]', c = '' },
-		['list_device_commands'] = { cmd = 'config', par = '"devId": "%s"', res = '[ "%s" ]', c = '' },
-		['get_config'] = { cmd = 'config', par = '', res = '[ "%s" ]', c = '' },
-		['get_current_activity_id'] = { cmd = 'getCurrentActivity', par = '', res = '"ActivityID": "%s"', c = '' }
-	}
 }
 
 local TaskData = {
@@ -187,13 +191,27 @@ local TaskData = {
 	BUSY = 1
 }
 	
-	
+-- LUA Job Status. Use for handlers
+local JobStatus = {
+	NO_JOB = -1, -- No job, i.e. job doesn't exist.
+	WAITING_TO_START = 0, -- Job waiting to start.
+	IN_PROGRESS = 1, -- Job in progress.
+	ERROR = 2, -- Job error.
+	ABORTED = 3, -- Job aborted.
+	DONE = 4, -- Job done.
+	WAITING_CALLBACK = 5, -- Job waiting for callback. Used in special cases.
+	REQUEUE = 6, -- Job requeue. If the job was aborted and needs to be started, use this special value.
+	PENDING_DATA = 7, -- Job in progress with pending data. This means the job is waiting for data, but can't take it now. 
+}
+
+
 ---------------------------------------------------------------------------------------------
 -- Utility functions
 ---------------------------------------------------------------------------------------------
 local log
 local var
 local utils
+local cnfgFile
 
 
 -- API getting and setting variables and attributes from Vera more efficient.
@@ -265,19 +283,23 @@ end
 
 -- API to handle basic logging and debug messaging
 local function logAPI()
-local _LLError = 1
-local _LLWarning = 2
-local _LLInfo = 8
-local _LLDebug = 11
-local def_level = _LLError
+local def_level = 1
 local def_prefix = ''
 local def_debug = false
+local def_file = false
+local format = string.format
 
 	local function _update(level)
-		if level > 10 then
+		if level > 100 then
+			def_file = true
 			def_debug = true
 			def_level = 10
+		elseif level > 10 then
+			def_debug = true
+			def_file = false
+			def_level = 10
 		else
+			def_file = false
 			def_debug = false
 			def_level = level
 		end
@@ -288,30 +310,61 @@ local def_debug = false
 		def_prefix = prefix
 	end	
 
-	local function _log(text, level) 
-		local level = (level or 10)
-		if (def_level >= level) then
-			if (level == 10) then level = 50 end
-			local msg = (text or "no text")
-			luup.log(def_prefix .. ": " .. msg:sub(1,80), (level or 50)) 
+	local function _log(...) 
+		if (def_level >= 10) then
+			local msg = format(...) or "no text"
+			luup.log(def_prefix .. ": " .. msg:sub(1,80), 50) 
 		end	
 	end	
 	
-	local function _debug(text)
+	local function _info(...) 
+		if (def_level >= 8) then
+			local msg = format(...) or "no text"
+			luup.log(def_prefix .. ": " .. msg:sub(1,80), 8) 
+		end	
+	end	
+
+	local function _warning(...) 
+		if (def_level >= 2) then
+			local msg = format(...) or "no text"
+			luup.log(def_prefix .. ": " .. msg:sub(1,80), 2) 
+		end	
+	end	
+
+	local function _error(...) 
+		if (def_level >= 1) then
+			local msg = format(...) or "no text"
+			luup.log(def_prefix .. ": " .. msg:sub(1,80), 1) 
+		end	
+	end	
+
+	local function _debug(...)
 		if def_debug then
-			luup.log(def_prefix .. "_debug: " .. (text or "no text"), 50) 
+			local msg = format(...) or "no text"
+			luup.log(def_prefix .. "_debug: " .. msg, 50) 
+		end	
+	end
+	
+	-- Write to file for detailed analisys
+	local function _logfile(...)
+		if def_file then
+			local fh = io.open("/tmp/log/harmony.log","a")
+			local msg = format(...) or "no text"
+			fh:write(msg)
+			fh:write("\n")
+			fh:close()
 		end	
 	end
 	
 	return {
 		Initialize = _init,
-		LLError = _LLError,
-		LLWarning = _LLWarning,
-		LLInfo = _LLInfo,
-		LLDebug = _LLDebug,
-		Update = _update,
+		Error = _error,
+		Warning = _warning,
+		Info = _info,
 		Log = _log,
-		Debug = _debug
+		Debug = _debug,
+		Update = _update,
+		LogFile = _logfile
 	}
 end 
 
@@ -389,13 +442,15 @@ local _OpenLuup = 99
 		IsOpenLuup = _OpenLuup
 	}
 end 
+
+
+
 --[[
 	Minimal WebSocket client API. Taken from lua-websockets library http://lipp.github.io/lua-websockets/
-	Limited to syncronous mode and only ws support.
+	Limited to Harmony Hub only support. Messages less than 4MB, only with FIN bit set, Send is masked, receive is never.
 ]]
 local function wsAPI()
 	-- Local variables used.
-	local guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 	local sv = { CLOSED = 0, OPEN = 1, IS_CLOSING = 2, ERROR = -1 }
 	local ipa = ""
 	local port =  "8088"
@@ -406,196 +461,16 @@ local function wsAPI()
 	local band = bit.band
 	local bxor = bit.bxor
 	local bor = bit.bor
-	local bnot = bit.bnot
 	local rshift = bit.rshift
-	local lshift = bit.lshift
-	local ssub = string.sub
 	local sbyte = string.byte
 	local schar = string.char
-	local srep = string.rep
 	local format = string.format
 	local mmin = math.min
-	local mfloor = math.floor
 	local mrandom = math.random
 	local unpack = unpack or table.unpack
 	local tinsert = table.insert
 	local tconcat = table.concat
 	
-	local read_n_bytes = function(str, pos, n)
-		pos = pos or 1
-		return pos+n, sbyte(str, pos, pos + n - 1)
-	end
-
-	local read_int8 = function(str, pos)
-		return read_n_bytes(str, pos, 1)
-	end
-
-	local read_int16 = function(str, pos)
-		local new_pos,a,b = read_n_bytes(str, pos, 2)
-		return new_pos, lshift(a, 8) + b
-	end
-
-	local read_int32 = function(str, pos)
-		local new_pos,a,b,c,d = read_n_bytes(str, pos, 4)
-		return new_pos,
-		lshift(a, 24) +
-		lshift(b, 16) +
-		lshift(c, 8 ) +
-		d
-	end
-
-	local pack_bytes = string.char
-
-	local write_int8 = pack_bytes
-
-	local write_int16 = function(v)
-		return pack_bytes(rshift(v, 8), band(v, 0xFF))
-	end
-
-	local write_int32 = function(v)
-		return pack_bytes(
-			band(rshift(v, 24), 0xFF),
-			band(rshift(v, 16), 0xFF),
-			band(rshift(v,  8), 0xFF),
-			band(v, 0xFF)
-		)
-	end
-
-	local base64_encode = function(data)
-		return (mime.b64(data))
-	end
-	
-	local M_lshift, M_rshift -- forward declare
-	function M_rshift(a,disp) -- Lua5.2 insipred
-		if disp < 0 then return M_lshift(a,-disp) end
-		return mfloor(a % 2^32 / 2^disp)
-	end
-
-	function M_lshift(a,disp) -- Lua5.2 inspired
-		if disp < 0 then return M_rshift(a,-disp) end 
-		return (a * 2^disp) % 2^32
-	end
-
-	local lrotate = function(x, disp)  -- Lua5.2 inspired
-		local disp = -disp
-		disp = disp % 32
-		local low = band(x, 2^disp-1)
-		return M_rshift(x, disp) + M_lshift(low, 32-disp)
-	end
-	
-	local generate_key = function()
-		-- used for generate key random ops
-		math.randomseed(os.time())
-		local r1 = mrandom(0,0xfffffff)
-		local r2 = mrandom(0,0xfffffff)
-		local r3 = mrandom(0,0xfffffff)
-		local r4 = mrandom(0,0xfffffff)
-		local key = write_int32(r1)..write_int32(r2)..write_int32(r3)..write_int32(r4)
-		assert(#key==16,#key)
-		return base64_encode(key)
-	end
-	
-	-- from wiki article, not particularly clever impl
-	local sha1 = function(msg)
-		local h0 = 0x67452301
-		local h1 = 0xEFCDAB89
-		local h2 = 0x98BADCFE
-		local h3 = 0x10325476
-		local h4 = 0xC3D2E1F0
-	
-		local bits = #msg * 8
-		-- append b10000000
-		msg = msg..schar(0x80)
-
-		-- 64 bit length will be appended
-		local bytes = #msg + 8
-
-		-- 512 bit append stuff
-		local fill_bytes = 64 - (bytes % 64)
-		if fill_bytes ~= 64 then
-			msg = msg..srep(schar(0),fill_bytes)
-		end
-
-		-- append 64 big endian length
-		local high = mfloor(bits/2^32)
-		local low = bits - high*2^32
-		msg = msg..write_int32(high)..write_int32(low)
-
-		assert(#msg % 64 == 0,#msg % 64)
-
-		for j=1,#msg,64 do
-			local chunk = msg:sub(j,j+63)
-			assert(#chunk==64,#chunk)
-			local words = {}
-			local next = 1
-			local word
-			repeat
-				next,word = read_int32(chunk, next)
-				tinsert(words, word)
-			until next > 64
-			assert(#words==16)
-			for i=17,80 do
-				words[i] = bxor(words[i-3],words[i-8],words[i-14],words[i-16])
-				words[i] = lrotate(words[i],1)
-			end
-			local a = h0
-			local b = h1
-			local c = h2
-			local d = h3
-			local e = h4
-
-			for i=1,80 do
-				local k,f
-				if i > 0 and i < 21 then
-					f = bor(band(b,c),band(bnot(b),d))
-					k = 0x5A827999
-				elseif i > 20 and i < 41 then
-					f = bxor(b,c,d)
-					k = 0x6ED9EBA1
-				elseif i > 40 and i < 61 then
-					f = bor(band(b,c),band(b,d),band(c,d))
-					k = 0x8F1BBCDC
-				elseif i > 60 and i < 81 then
-					f = bxor(b,c,d)
-					k = 0xCA62C1D6
-				end
-
-				local temp = lrotate(a,5) + f + e + k + words[i]
-				e = d
-				d = c
-				c = lrotate(b,30)
-				b = a
-				a = temp
-			end
-	
-			h0 = h0 + a
-			h1 = h1 + b
-			h2 = h2 + c
-			h3 = h3 + d
-			h4 = h4 + e
-		end
-
-		-- necessary on sizeof(int) == 32 machines
-		h0 = band(h0,0xffffffff)
-		h1 = band(h1,0xffffffff)
-		h2 = band(h2,0xffffffff)
-		h3 = band(h3,0xffffffff)
-		h4 = band(h4,0xffffffff)
-
-		return write_int32(h0)..write_int32(h1)..write_int32(h2)..write_int32(h3)..write_int32(h4)
-	end
-	local bits = function(...)
-		local n = 0
-		for _,bitn in pairs{...} do
-			n = n + 2^bitn
-		end
-		return n
-	end
-
-	local bit_7 = bits(7)
-	local bit_0_3 = bits(0,1,2,3)
-	local bit_0_6 = bits(0,1,2,3,4,5,6)
-
 	local xor_mask = function(encoded,mask,payload)
 		local transformed,transformed_arr = {},{}
 		for p=1,payload,2000 do
@@ -611,132 +486,36 @@ local function wsAPI()
 		return tconcat(transformed_arr)
 	end
 
-	local encode_header_small = function(header, payload)
-		return schar(header, payload)
-	end
-
-	local encode_header_medium = function(header, payload, len)
-		return schar(header, payload, band(rshift(len, 8), 0xFF), band(len, 0xFF))
-	end
-
-	local encode_header_big = function(header, payload, high, low)
-		return schar(header, payload)..write_int32(high)..write_int32(low)
-	end
-
 	local encode = function(data,opcode)
-		local header = opcode or 1-- TEXT is default opcode
-		header = bor(header,bit_7)
-		local payload = 0
-		payload = bor(payload,bit_7)
+		local header = (opcode or 1) + 128 -- TEXT is default opcode, we always send with FIN bit set
+		local payload = 128  -- We always send with mask bit set.
 		local len = #data
 		local chunks = {}
 		if len < 126 then
 			payload = bor(payload,len)
-			tinsert(chunks,encode_header_small(header,payload))
+			tinsert(chunks,schar(header,payload))
 		elseif len <= 0xffff then
 			payload = bor(payload,126)
-			tinsert(chunks,encode_header_medium(header,payload,len))
+			tinsert(chunks,schar(header, payload, band(rshift(len, 8), 0xFF), band(len, 0xFF)))
 		elseif len < 2^53 then
-			local high = mfloor(len/2^32)
-			local low = len - high*2^32
-			payload = bor(payload,127)
-			tinsert(chunks,encode_header_big(header,payload,high,low))
+			-- We never send messages this big
 		end
 		local m1 = mrandom(0,0xff)
 		local m2 = mrandom(0,0xff)
 		local m3 = mrandom(0,0xff)
 		local m4 = mrandom(0,0xff)
 		local mask = {m1,m2,m3,m4}
-		tinsert(chunks,write_int8(m1,m2,m3,m4))
+		tinsert(chunks,schar(m1,m2,m3,m4))
 		tinsert(chunks,xor_mask(data,mask,#data))
 		return tconcat(chunks)
 	end
 
-	local decode = function(encoded)
-		local encoded_bak = encoded
-		if #encoded < 2 then
-			return nil,2-#encoded
-		end
-		local pos,header,payload
-		pos,header = read_int8(encoded,1)
-		pos,payload = read_int8(encoded,pos)
-		local high,low
-		encoded = ssub(encoded,pos)
-		local bytes = 2
-		local fin = band(header,bit_7) > 0
-		local opcode = band(header,bit_0_3)
-		local mask = band(payload,bit_7) > 0
-		payload = band(payload,bit_0_6)
-		if payload > 125 then
-			if payload == 126 then
-				if #encoded < 2 then
-					return nil,2-#encoded
-				end
-				pos,payload = read_int16(encoded,1)
-			elseif payload == 127 then
-				if #encoded < 8 then
-					return nil,8-#encoded
-				end
-				pos,high = read_int32(encoded,1)
-				pos,low = read_int32(encoded,pos)
-				payload = high*2^32 + low
-				if payload < 0xffff or payload > 2^53 then
-					assert(false,'INVALID PAYLOAD '..payload)
-				end
-			else
-				assert(false,'INVALID PAYLOAD '..payload)
-			end
-			encoded = ssub(encoded,pos)
-			bytes = bytes + pos - 1
-		end
-		local decoded
-		if mask then
-			local bytes_short = payload + 4 - #encoded
-			if bytes_short > 0 then
-				return nil,bytes_short
-			end
-			local m1,m2,m3,m4
-			pos,m1 = read_int8(encoded,1)
-			pos,m2 = read_int8(encoded,pos)
-			pos,m3 = read_int8(encoded,pos)
-			pos,m4 = read_int8(encoded,pos)
-			encoded = ssub(encoded,pos)
-			local mask = {
-				m1,m2,m3,m4
-			}
-			decoded = xor_mask(encoded,mask,payload)
-			bytes = bytes + 4 + payload
-		else
-			local bytes_short = payload - #encoded
-			if bytes_short > 0 then
-				return nil,bytes_short
-			end
-			if #encoded > payload then
-				decoded = ssub(encoded,1,payload)
-			else
-				decoded = encoded
-			end
-			bytes = bytes + payload
-		end
-		return decoded,fin,opcode,encoded_bak:sub(bytes+1),mask
-	end
-
-	local encode_close = function(code,reason)
-		if code then
-			local data = write_int16(code)
-			if reason then
-				data = data..tostring(reason)
-			end
-			return data
-		end
-		return ''
-	end
-
 	local decode_close = function(data)
-		local _,code,reason
+		local code,reason = 1005, ''
 		if data then
 			if #data > 1 then
-				_,code = read_int16(data,1)
+				local lb2, lb1 = data:byte(1,2)
+				code = lb2*0x100 + lb1
 			end
 			if #data > 2 then
 				reason = data:sub(3)
@@ -764,113 +543,86 @@ local function wsAPI()
 		return tconcat(lines,'\r\n')
 	end
 
-	local sec_websocket_accept = function(sec_websocket_key)
-		local a = sec_websocket_key..guid
-		local sha1 = sha1(a)
-		assert((#sha1 % 2) == 0)
-		return base64_encode(sha1)
-	end
-
-	local http_headers = function(request)
-		local headers = {}
-		if not request:match('.*HTTP/1%.1') then
-			return headers
+	local ws_message_waiting = function(timeout)
+		if state ~= sv.OPEN then
+			return nil,false,1006,'wrong state'
 		end
-		request = request:match('[^\r\n]+\r\n(.*)')
-		local empty_line
-		for line in request:gmatch('[^\r\n]*\r\n') do
-			local name,val = line:match('([^%s]+)%s*:%s*([^\r\n]+)')
-			if name and val then
-				name = name:lower()
-				if not name:match('sec%-websocket') then
-					val = val:lower()
-				end
-				if not headers[name] then
-					headers[name] = val
-				else
-					headers[name] = headers[name]..','..val
-				end
-			elseif line == '\r\n' then
-				empty_line = true
-			else
-				assert(false,line..'('..#line..')')
-			end
-		end
-		return headers,request:match('\r\n\r\n(.*)')
+		local tm = 0
+		if timeout then tm = timeout end
+		local list = {sock}
+		local rlist, slist, stat = socket.select (list, nil, tm)
+		return stat ~= 'timeout'
 	end
 
 	-- start of actual WS functions
-	local ws_receive = function()
+	local ws_receive = function(pong)
 		if state ~= sv.OPEN and state ~= sv.IS_CLOSING then
 			return nil,nil,false,1006,'wrong state'
 		end
-		local first_opcode
-		local frames
-		local bytes = 3
-		local encoded = ''
 		local clean = function(was_clean,code,reason)
 		    state = sv.CLOSED
 			sock:close()
 			return nil,nil,was_clean,code,reason or 'closed'
 		end
-		while true do
-			local chunk,err = sock:receive(bytes)
-			if err then
+		local chunk,err = sock:receive(2)
+		if err == 'timeout' then
+print("ws_receive timeout header",tostring(chunk))
+			return nil, nil, true, 1000, err
+		elseif err then
+print(format("ws_receive error %s header",err),tostring(chunk))
+			return clean(false,1006,err)
+		end
+		local opcode,pllen = chunk:byte(1,2)
+		-- Fin bit always set, so just substract 128 to get opcode
+		opcode = opcode - 128
+		-- Mask bit never set on response from hub, so just get length
+		if pllen == 126 then
+			-- read extended length bytes
+			local chunk,err = sock:receive(2)
+			local lb2,lb1 = chunk:byte(1,2)
+			pllen = lb2*0x100 + lb1
+		elseif pllen == 127 then
+			-- We never get more than 16MB from hub, so we can ignore high 5 bytes
+			local chunk,err = sock:receive(8)
+			local lb3,lb2,lb1 = chunk:byte(6,8)
+			pllen= lb3*0x10000 + lb2*0x100 + lb1
+		end
+		-- read payload bytes, never masked so plain text from Hub
+		local decoded,err = "",nil
+		if pllen > 0 then
+			decoded,err = sock:receive(pllen)
+			if err == 'timeout' then
+				return nil, nil, true, 1000, err
+			elseif err then
 				return clean(false,1006,err)
 			end
-			encoded = encoded..chunk
-			local decoded,fin,opcode,_,masked = decode(encoded)
-			if masked then
-				return clean(false,1006,'Websocket receive failed: frame was not masked')
-			end			
-			if decoded then
-				if opcode == 8 then
-					if state ~= sv.IS_CLOSING then
-						local code,reason = decode_close(decoded)
-						-- echo code
-						local msg = encode_close(code)
-						local encoded = encode(msg,8)
-						local n,err = sock:send(encoded)
-						if n == #encoded then
-							return clean(true,code,reason)
-						else
-							return clean(false,code,err)
-						end
-					else
-						return decoded,opcode
-					end
-				end
-				if not first_opcode then
-					first_opcode = opcode
-				end
-				if not fin then
-					if not frames then
-						frames = {}
-					elseif opcode ~= 0 then
-						return clean(false,1002,'protocol error')
-					end
-					bytes = 3
-					encoded = ''
-					tinsert(frames,decoded)
-				elseif not frames then
-					return decoded,first_opcode
+		end	
+		-- Check for closing
+		if opcode == 8 then
+			if state ~= sv.IS_CLOSING then
+				local code,reason = decode_close(decoded)
+				-- echo code
+				local msg = schar(rshift(code, 8), band(code, 0xFF))
+				local encoded = encode(msg,8)
+				local n,err = sock:send(encoded)
+				if n == #encoded then
+					return clean(true,code,reason)
 				else
-					tinsert(frames,decoded)
-					return tconcat(frames),first_opcode
+					return clean(false,code,err)
 				end
 			else
-				assert(type(fin) == 'number' and fin > 0)
-				bytes = fin
+				return decoded,opcode
 			end
 		end
-		assert(false,'never reach here')
+		return decoded,opcode
 	end
 	
-	local ws_close = function(code,reason)
+	local ws_close = function(code)
 		if state ~= sv.OPEN then
 			return false,1006,'wrong state'
 		end
-		local msg = encode_close(code or 1000,reason)
+		local code = (code or 1000)
+		local msg = schar(rshift(code, 8), band(code, 0xFF))
 		local encoded = encode(msg,8)
 		local n,err = sock:send(encoded)
 		local was_clean = false
@@ -896,22 +648,27 @@ local function wsAPI()
 			return nil,false,1006,'wrong state'
 		end
 		local encoded = encode(data,opcode or 1)
-		local n,err = sock:send(encoded)
+		local n,err = sock:send(encoded)		
 		if n ~= #encoded then
 			return nil, ws_close(1006,err)
 		end
 		return true
 	end
 	
-	local ws_message_waiting = function()
-		if state ~= sv.OPEN then
-			return nil,false,1006,'wrong state'
+	local ws_ping = function()
+		local res, stat, err, msg = ws_send("",9)
+		if res then
+			local rsp, op, was_clean,code,reason = ws_receive(true)
+			if op == 10 then
+				return true
+			else
+				return false, was_clean,code,reason
+			end
+		else
+			return nil, stat, err, msg
 		end
-		local list = {sock}
-		local _,_, stat = socket.select (list, nil, 1)
-		return stat ~= 'timeout'
 	end
-
+	
 	local function ws_connect (host,port,uri)
 		ipa = host
 		port = port
@@ -924,7 +681,8 @@ local function wsAPI()
 			sock:close()
 			return nil,err,nil
 		end
-		local key = generate_key()
+		sock:settimeout(10)
+		local key = "IVEs+XMFJmzMFU/4qqJEqw=="  -- We use a fixed key
 		local req = upgrade_request
 			{
 				key = key,
@@ -936,23 +694,20 @@ local function wsAPI()
 		if n ~= #req then
 			return nil,err,nil
 		end
-		local resp = {}
+		local hdr_ok = false
 		repeat
 			local line,err = sock:receive('*l')
-			resp[#resp+1] = line
 			if err then
 				return nil,err,nil
 			end
+			-- if we receive HTTP/1.1 101 Switching Protocols then assume connect is ok.
+			if line == "HTTP/1.1 101 Switching Protocols" then hdr_ok = true end
 		until line == ''
-		local response = tconcat(resp,'\r\n')
-		local headers = http_headers(response)
-		local expected_accept = sec_websocket_accept(key)
-		if headers['sec-websocket-accept'] ~= expected_accept then
-			local msg = 'Websocket Handshake failed: Invalid Sec-Websocket-Accept (expected %s got %s)'
-			return nil,msg:format(expected_accept,headers['sec-websocket-accept'] or 'nil'),headers
+		if not hdr_ok then
+			return nil,'Websocket Handshake failed'
 		end
 		state = sv.OPEN
-		return true,headers['sec-websocket-protocol'],headers
+		return true
 	end
 
 	local ws_is_connected = function()
@@ -962,6 +717,7 @@ local function wsAPI()
 	return {
 		connect = ws_connect,
 		close = ws_close,
+		ping = ws_ping,
 		send = ws_send,
 		receive = ws_receive,
 		is_connected = ws_is_connected,
@@ -969,23 +725,1020 @@ local function wsAPI()
 	}
 end
 
+--[[ 
+	API to communicate all command to the Harmony Hub using WebSockets.
+]]
+local function HarmonyAPI()
+	local prsMap = { press = 'press', hold = 'hold', release = 'release' } 
+	local numberOfMessages = 20	-- Number of messages to wait on expected one before returning timeout.
+	local msg_id = 1
+	local last_command_ts = 0
+	local last_ping_success = 0
+	local ws_client
+	local message_prefix = ""
+	local hub_data = { remote_id = "", friendly_name = "", email = "", account_id = "" }
+	local jobStat = JobStatus.NO_JOB
+	local polling_enabled = false
+	local cbFunction = nil				-- Can register callback function for acync messages and messages not handled by default flow
+	local format = string.format
+	local slen = string.len
+	local tconcat = table.concat
+	local tinsert = table.insert
+	local tremove = table.remove
+
+	-- Get config information from hub. Needed to get HubID for web socket communications.
+	local function request_hub_info(ipa, port)
+        local url = format('http://%s:%s/',ipa,port)
+        local request_body = '{"id":1,"cmd":"connect.discoveryinfo?get","params":{}}'
+        local headers = {
+            ['Origin']= 'http://localhost.nebula.myharmony.com',
+            ['Content-Type'] = 'application/json',
+            ['Accept'] = 'application/json',
+            ['Accept-Charset'] = 'utf-8',
+			['Content-Length'] = slen(request_body)
+        }
+		local result = {}
+		local bdy,cde,hdrs,stts = http.request{
+			url=url, 
+			method='POST',
+			sink=ltn12.sink.table(result),
+			source = ltn12.source.string(request_body),
+			headers = headers
+		}
+		if cde == 200 then
+			local json_response = json.decode(tconcat(result))
+			local data = {}
+			data.friendly_name = json_response['data']['friendlyName'] or ""
+			data.remote_id = json_response['data']['remoteId'] or ""
+			data.email = json_response['data']['email'] or ""
+			data.account_id = json_response['data']['accountId'] or ""
+			data.uuid = json_response['data']['uuid'] or ""
+			return true, data
+		else
+			return nil, nil, cde or 400, stts or "discover failed."
+		end
+	end
+
+	-- Wait for the response for the given message ID
+	-- Max attempts to avoid dead lock.
+	local function wait_response(msgid)
+		local maxcnt = numberOfMessages
+		while maxcnt > 1 do
+			maxcnt = maxcnt -1
+			local response, op, was_clean, code, reason = ws_client.receive()
+			if response then
+log.Debug("ws_client.receive response: "..(response:sub(1,100) or ""))
+				last_command_ts = os.time()
+				local data, _, errMsg = json.decode(response)
+				if data then
+					if data.id == message_prefix.."#"..msgid then
+						return true, data
+					else
+--log.Debug("response is for other message id : "..(response:sub(1,100) or ""))
+						if type(cbFunction) == "function" then
+							pcall(cbFunction, data)
+						end	
+					end
+				else
+					log.Debug("wait_response: Failed to decode hub response %s.", (errMsg or ""))
+					return nil, nil, 500, "Failed to decode hub response"
+				end
+			else
+--log.Debug("ws_client.receive error %s, %d, %s ",tostring(was_clean),code,reason)
+				maxcnt = 0
+			end	
+		end
+		-- Should not come here
+		return nil, nil, 500, "Error waiting for response."
+	end
+
+	-- Send a payload request to Harmony Hub and return json response.
+	-- When resp is nil or true expect a response message
+	local function send_request(command, params, msgid, wait_for_response)
+		local params = params or '{"verb":"get","format":"json"}'
+		local msid
+		if msgid then
+			msid = msgid
+		else
+			msg_id = msg_id+1
+			if msg_id > 999999 then msg_id = 1 end
+			msid = msg_id
+		end
+		local payload = format('{"hbus":{"cmd":"%s","id":"%s#%s","params":%s}}',command,message_prefix,msid,params)
+		local res, stat, err, msg = ws_client.send(payload) 
+		if res then
+log.Debug("send_request, sent payload %s",payload)
+			if wait_for_response ~= false then return wait_response(msid) end
+			last_command_ts = os.time()
+			return true
+		else
+			log.Debug("ws_client.send failed : %s, %s, %s. Retrying once.",tostring(stat),tostring(err),msg)
+			-- Try to reconnect and resend command once so we can keep going
+			if err == 1006 then
+				local res = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
+				if res then
+					local res, stat, err, msg = ws_client.send(payload) 
+					if res then
+						if wait_for_response ~= false then return wait_response(msid) end
+						last_command_ts = os.time()
+						return true
+					end
+				end	
+			end	
+		end	
+		return nil, nil, 408, "Send failed after retry."
+	end
+
+	--[[ Open websocket to Hub. 
+			If not yet known, get the hub information and then open the web socket.
+	--]]
+	local function Connect()
+		if ((ipa or "") == "") then 
+			log.Error("Connect, no IP Address specified ") 
+			return nil, nil, 400, "IP address missing" 
+		end
+		if hub_data.remote_id == "" then
+			log.Debug("Retrieving Harmony Hub information.")
+			local res, data, cde, msg = request_hub_info(ipa,port)
+			if res then 
+				log.Debug("Hub details : %s, %s, %s, %s.",data.remote_id,data.account_id,data.friendly_name,data.email)
+				hub_data = data
+			else	
+				log.Error("Connect, failed geting details. Err %s, %s", cde or 500, msg or "unknown") 
+				return nil, nil, cde or 500, msg or "unknown"
+			end
+		end	
+		if ws_client.is_connected() then
+			log.Debug("We should have websocket open.")
+			return true, 200
+		else
+			local res, prot, hdrs = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
+			if res then
+				log.Debug("Websocket to Hub is opened...")
+				last_command_ts = os.time()
+				return true, 200
+			else	
+				log.Error("Connect, failed to open websocket to hub %s, err %s.",ipa,prot or "")
+			end
+			ws_client.close()
+		end	
+		return nil, nil, 503, "Unable to connect."
+	end
+
+	-- Close socket to Hub
+	local function Close()
+		ws_client.close()
+		return true, 200
+	end
+
+	-- Return current Job Status	
+	local GetJobStatus = function()
+		return true, jobStat or JobStatus.NO_JOB
+	end	
+	
+	-- Return the details about the Hub. Populated after a succesfull Connect.
+	local GetHubDetails= function()
+		if hub_data.remote_id ~= "" then
+			return true, hub_data
+		else
+			return nil, nil, 404, "Hub details unknown."
+		end	
+	end
+	
+	--[[ Request the current activity from Hub
+			Return true and current activity ID on success.
+			On error return error code and message.
+	--]]
+	local GetCurrentActivtyID = function(noclose)
+		jobStat = JobStatus.IN_PROGRESS
+		if not polling_enabled then Connect() end
+		local res, data, cde, msg = send_request("vnd.logitech.harmony\\/vnd.logitech.harmony.engine?getCurrentActivity")
+		if (not polling_enabled) and (noclose ~= true) then Close() end
+		if res then 
+			if data.code == 200 then
+				res = true
+				data = data.data.result
+			else	
+				cde = data.code or 400
+				msg = data.msg or "unknown error"
+				data = nil
+			end	
+		else
+			cde = 503
+			msg = "No response from hub."
+		end
+		jobStat = JobStatus.NO_JOB
+		return res, data, cde, msg
+	end
+
+	--[[ Send start activity command to hub if not current activity.
+			Params : activity ID to start, if wait is false, return without waiting for message started confirmation from hub.
+			Return true on success, false with error code and message if not.
+	--]]
+	local StartActivity = function(actID,wait)
+		local aid = actID or ""
+		if aid ~= "" then
+			-- Get current activity
+			local res, data, cde, msg = GetCurrentActivtyID(true)
+			if not res then
+				-- Log error and data is now nil so always try to start
+				log.Error("Failed getting current activity. %s, %s",cde, msg)
+			end	
+			-- Only send if it is a diferent activity.
+			if data ~= aid then
+				jobStat = JobStatus.IN_PROGRESS
+				local res1, data1, cde1, msg1 = send_request("harmony.activityengine?runactivity", format('{"async": "true","timestamp": 10000 ,"args":{"rule":"start"},"activityId":"%s"}',aid))
+				if res1 then 
+					-- For start activity we wait until we get confirmation it got stated
+--					if wait ~= false then 
+					if false then -- disable wait, let call back handle it
+						local maxcnt = numberOfMessages
+						local done = false
+						while (not done) and (maxcnt > 1) do
+							maxcnt = maxcnt -1
+							if data1.cmd == nil then
+								-- we need a command respond, get next message
+							elseif data1.cmd == 'harmony.engine?startActivityFinished' then
+								-- Success response
+								done = true
+							elseif data1.cmd ~= 'harmony.engine?startActivity' and data1.cmd ~= 'harmony.engine?helpdiscretes' then
+							elseif data1.code == 200 then
+								-- Success response
+								done = true
+							elseif data1.code ~= 100 then
+								-- Only other option is in process message and we are not getting that, so fail
+								done = true
+							end	
+							if done then
+								res = true
+								data = aid
+							else
+								-- try to read next message
+								res1, data1, cde1, msg1 = wait_response(msg_id)
+							end
+						end	
+						if not done then 
+							-- We should not come here
+							res = nil
+							data = nil
+							cde = 504
+							msg = "Failed to get activity start confirmation after max retries."
+						end	
+					else	
+						-- Not waiting on reply
+						res = true
+						data = aid
+					end
+				else
+					res = nil
+					data = nil
+					cde = cde1 or 503
+					msg = msg1 or "No response from hub."
+				end
+				if not polling_enabled then Close() end
+				jobStat = JobStatus.NO_JOB
+				return res, data, cde, msg
+			else
+				-- We are already running this activity. Do nothing.
+				return true, aid
+			end
+		else
+			return nil, nil, 400, "Missing parameter, activityID"
+		end
+	end
+	
+	--[[ Send change channel command to hub
+			Params : channel to select.
+			Return true on success, error code and message if not.
+	--]]
+	local ChangeChannel = function(channel)
+		local chnl = channel or ""
+		if chnl ~= "" then
+			jobStat = JobStatus.IN_PROGRESS
+			if not polling_enabled then Connect() end
+			local res, data, cde, msg = send_request("harmony.engine?changeChannel", format('{"timestamp":10000,"channel":%s}',chnl))
+			if not polling_enabled then Close() end
+			jobStat = JobStatus.NO_JOB
+			return res, data, cde, msg
+		else
+			return nil, nil, 400, "Missing parameter, Channel"
+		end
+	end
+
+	--[[ Get State Digest from hub to get config details
+			Return true and data on success, false with error code and message if not.
+	--]]
+	local GetStateDigest = function()
+		jobStat = JobStatus.IN_PROGRESS
+		if not polling_enabled then Connect() end
+		local res, data, cde, msg = send_request("vnd.logitech.connect\\/vnd.logitech.statedigest?get")
+		if not polling_enabled then Close() end
+		if res then 
+			-- The user callback may also want process state digest details.
+			if type(cbFunction) == 'function' then 
+				pcall(cbFunction, data) 
+			end	
+		end
+		jobStat = JobStatus.NO_JOB
+		return res, data, cde, msg
+	end
+	
+	--[[ Send start hold action command. 
+			Params : device ID to send to, command to send, duration to hold the key-press, key-press action.
+			Return true on success, false with error code and message if not.
+			
+		Send HoldAction commands every 0.5 seconds for the time of the duration. Called from IssueDeviceCommand only.
+	--]]
+	local IssueDeviceCommand = function(deviceID,command,duration,press)
+		local res, data, cde, msg = nil, nil, 400, ""
+		local id = deviceID or ""
+		local cmd = command or ""
+		local dur = duration or 0
+		local prs = press or prsMap.press
+		if id ~= "" and cmd ~= "" then
+			local timestamp = 10000 -- It seems we need to restart the timestamp for each sequence, else next will not work.
+			log.Debug("Sending holdAction Command %s, %s, %s, %s.", id, cmd, dur, prs)
+			local action = format('{\\"command\\":\\"%s\\",\\"type\\":\\"IRCommand\\",\\"deviceId\\":\\"%s\\"}', cmd, id)
+			local params = format('{"status":"%s","timestamp":%s,"verb":"render","action":"%s"}',prs,timestamp,action)
+			-- First key-press down command
+			jobStat = JobStatus.IN_PROGRESS
+			if not polling_enabled then Connect() end
+			-- For Hold action sequesce we must use the same message ID. Lets use HoldAction with command.
+			-- Depends on device if we get a response. Assume none.
+			local res1, data1, cde1, msg1 = send_request("vnd.logitech.harmony\\/vnd.logitech.harmony.engine?holdAction", params, "HOLD", false)
+			timestamp = timestamp + 254 
+			if res1 then 
+				if dur > 0 then
+					-- If we have a duration then send a hold each 500ms end with a release. First schedule on 1 sec from now
+					local params = format('{"action":"%s","status":"%s","timestamp":%s}',action,prsMap.hold,timestamp)
+					for i = 1, (dur*5)-1 do
+						timestamp = timestamp + 254 
+						-- Sleep 200ms seconds between holds.
+						luup.sleep(200)
+						send_request("vnd.logitech.harmony\\/vnd.logitech.harmony.engine?holdAction", params, "HOLD", false)
+					end	
+					luup.sleep(100)
+				end	
+				local params = format('{"action":"%s","status":"%s","timestamp":%s}',action,prsMap.release,timestamp)
+				send_request("vnd.logitech.harmony\\/vnd.logitech.harmony.engine?holdAction", params, "HOLD", false)
+				res = true
+				data = 200
+			else	
+				res = nil
+				data = nil
+				cde = cde1 or 503
+				msg = msg1 or "No response from hub."
+			end
+			jobStat = JobStatus.NO_JOB
+			if not polling_enabled then Close() end
+		else
+			msg = "Missing parameters, Device ID, Command"
+		end
+		return res, data, cde, msg
+	end
+
+	--[[ Return full Hub configuration if changed
+			return true and config data if new config retrieved, 304 if not changed.
+	--]]
+	local GetConfig = function()
+		log.Debug("Retrieve the config from Hub.")
+		jobStat = JobStatus.IN_PROGRESS
+		if not polling_enabled then Connect() end
+		-- Requester does not has current config, get it from hub.
+		local res, data, cde, msg = send_request("vnd.logitech.harmony\\/vnd.logitech.harmony.engine?config")
+		if not polling_enabled then Close() end
+		jobStat = JobStatus.NO_JOB
+		return res, data, cde, msg
+	end
+
+	--[[  If a call back function is registered then call that when a message is received from the Hub and the normal loop is not process a job.
+	--]]
+	local HH_message_loop = function()
+		if polling_enabled then
+			-- Schedule to check again in one second
+			luup.call_delay("HH_message_loop",1)
+			if jobStat == JobStatus.NO_JOB then
+				-- No job in progress, so see if a message is waiting
+--				if ws_client.message_waiting() end
+				jobStat = JobStatus.IN_PROGRESS
+				while ws_client.message_waiting() do
+					local response, op = ws_client.receive()
+					if response then
+						local data, _, errMsg = json.decode(response)
+						if data then
+							if type(cbFunction) == 'function' then 
+								pcall(cbFunction, data) 
+							end	
+						else
+							log.Debug("message_loop: Failed to decode hub response %s.",errMsg)
+						end
+					end	
+				end
+				jobStat = JobStatus.NO_JOB
+			end
+		end
+	end
+	
+	--[[ To keep the connection to the Hub open send a ping each 45 seconds or 45 seconds after the last command.
+		  When polling is disabled, then close the connection to the Hub.
+	--]]
+	local HH_ping_loop = function()
+		if polling_enabled then
+			local next_poll = os.difftime(os.time(),last_command_ts)
+			if next_poll < 45 then 
+				next_poll = 45 - next_poll
+			else
+				next_poll = 45 
+			end
+			luup.call_delay("HH_ping_loop",next_poll)
+			if next_poll >= 45 then
+				log.Debug("Keep hub connection open")
+				if ws_client.ping() then
+					last_command_ts = os.time()
+					last_ping_success = last_command_ts
+				else
+					if os.difftime(os.time(),last_ping_success) > 600 then
+						log.Debug("Failed to ping hub for more than five minutes, trying to re-open connection.")
+						Close()
+						Connect()
+					else	
+						log.Debug("Failed to ping hub.")
+					end	
+				end	
+			end	
+		else
+			-- End of polling, close conneciton to Hub
+			Close()
+			log.Debug("End of polling, closed connection to Hub.")
+		end
+	end	
+	
+	-- When called with true then the conneciton to the Hub will be kept open
+	-- Can be toggeled at any time.
+	local SetHubPolling = function(poll)
+		polling_enabled = poll
+		if poll then
+			-- re-open the connection
+			local res, data, cde, msg = Connect()
+			if res then
+				-- Initiate polling again
+				luup.call_delay("HH_ping_loop",30)
+				HH_message_loop()
+			end
+			return res, data, cde, msg
+		end	
+		return true, 200
+	end
+	-- Return current polling status.
+	local GetHubPolling = function()
+		return polling_enabled
+	end	
+
+	--[[ Initialize module. If called second time it can be used to change the configuration and connect to a different IP address.
+			params: IP address, non-default port to connect to the Hub, optional function to call for a-sync messages handling.
+	--]]
+	local Initialize = function(_ipa, _port, _msg_prf, _cbf)
+		ipa = _ipa or ""
+		port = _port or 8088
+		cbFunction = _cbf
+		message_prefix = _msg_prf
+		polling_enabled = (type(cbFunction) == 'function')
+		-- Need to make this global for luup.call_delay use. 
+		_G.HH_send_hold_command = HH_send_hold_command
+		_G.HH_message_loop = HH_message_loop
+		_G.HH_ping_loop = HH_ping_loop
+		-- Connect to ws_client, when done prior, Close open connection to Hub and re-open with new details
+		if not ws_client then 
+			ws_client = wsAPI() 
+		else
+			Close()
+			-- Reset remote ID as we may have a different IP address.
+			hub_data.remote_id = ""
+		end
+		local res, data, cde, msg = Connect()
+		if res then
+			-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
+			luup.call_delay("HH_ping_loop",30)
+			HH_message_loop()
+		end
+		return res, data, cde, msg
+	end
+	
+	return{ -- Methods exposed by API
+		Initialize = Initialize,
+		Connect = Connect,
+		Close = Close,
+		GetJobStatus = GetJobStatus,
+		GetHubDetails = GetHubDetails,
+		GetStateDigest = GetStateDigest,
+		GetCurrentActivtyID = GetCurrentActivtyID,
+		StartActivity = StartActivity,
+		ChangeChannel = ChangeChannel,
+		IssueDeviceCommand = IssueDeviceCommand,
+		SetHubPolling = SetHubPolling,
+		GetHubPolling = GetHubPolling,
+		GetConfig = GetConfig
+	}
+end
+
+--[[--------------------------------------------------------------------------------------
+ Vera static config files creation functions for JSON and Device definition files.
+ Parameters:
+	FilePath: Path of config files.
+	IsUI7: true is Vera UI is UI7 or ALTUI.
+	IsOpenLuup: true is running on openLuup.
+	maxBtn: Maximum number of buttons.
+	remIconURI: remote Icons URI.
+	locIconURI: Local Icons URI.
+  Dependencies: logAPI module	
+]]
+local function ConfigFilesAPI()
+	local format = string.format
+	local FilePath,IsUI7,IsOpenLuup,maxBtn,remIconURI,locIconURI, iconImages, Dev, Sid, ChSid
+
+	local function _init(_path,_IsUI7,_IsOpenLuup,_maxBtn,_remIconURI,_locIconURI,_iconImages, _Dev, _Sid, _ChSid)
+		FilePath = _path
+		IsUI7 = _IsUI7
+		IsOpenLuup = _IsOpenLuup
+		maxBtn = _maxBtn
+		remIconURI = _remIconURI
+		locIconURI = _locIconURI
+		iconImages = _iconImages
+		Dev = _Dev
+		Sid = _Sid
+		ChSid = _ChSid
+	end
+
+	-- See if we have D_HarmonyDevice*.* files that no longer map to a child device.
+	-- Remove them as it will cause issues when child for same device is recreated.
+	local function _removeObsoleteChildDeviceFiles(childDevs)
+		local lfs = require("lfs")
+
+		local chDev = (childDevs or '') .. ','
+		for fname in lfs.dir(FilePath) do
+			local dname = string.match(fname, "D_HarmonyDevice"..Dev.."_%d+.")
+			if (dname ~= nil) then 
+				local _,dnum = string.match(dname, "(%d+)_(%d+)")
+				if (dnum ~= nil) then
+					-- We have a child device file, see if the number is still in list of child devices
+					dname = string.match(chDev, dnum..',')
+					if (dname == nil) then 
+						log.Warning('Removing obsolete child file %s.',fname)
+						os.remove(FilePath..fname)
+					else
+						log.Log('Child file %s still in use.',fname)
+					end	
+				end	
+			end
+		end
+	end
+
+	-- Support functions to build reoccurring JSON elements.
+	local function _buildJsonLabelControl(text,top,left,width,height,grp,dtop,dleft)
+		local str = '{ "ControlType": "label", '
+		if grp then str = str .. format('"ControlGroup": "%s", "top": %d, "left": %d, ',grp,dtop,dleft) end
+		str = str .. format('"Label": { "text": "%s" }, "Display": { "Top": %d, "Left": %d, "Width": %d, "Height": %d }}',text,top,left,width,height)
+		return str
+	end
+	local function _buildJsonVariableControl(text,top,left,width,height,grp,dtop,dleft)
+		local str = '{ "ControlType": "variable", '
+		if grp then str = str .. format('"ControlGroup": "%s", "top": %d, "left": %d, ',grp,dtop,dleft) end
+		str = str .. format('"Display": { "Service": "%s", "Variable": "%s", "Top": %d, "Left": %d, "Width": %d, "Height": %d }}',Sid,text,top,left,width,height)
+		return str
+	end
+	local function _buildJsonInputControl(text,top,left,width,height,grp,dtop,dleft)
+		local str = '{ "ControlType": "input", '
+		if text then str = str .. format('"ID": "ID%s", ',text) end
+		if grp then str = str .. format('"ControlGroup": "%s", "top": %d, "left": %d, ',grp,dtop,dleft) end
+		str = str .. format('"Display": { "Top": %d, "Left": %d, "Width": %d }}',top,left,width)
+		return str
+	end
+	local function _buildJsonButtonControl(text,act,prm,top,left,width,height,grp,dtop,dleft)
+		local str = format('{ "ControlType": "button", "Label": { "text":"%s"}, ',text)
+		if grp then str = str .. format('"ControlGroup": "%s", "top": %d, "left": %d, ',grp,dtop,dleft) end
+		str = str .. format('"Display": { "Top": %d, "Left": %d, "Width": %d },',top,left,width)
+		str = str .. format('"Command": { "Service":"%s","Action":"%s"',Sid,act)
+		if prm then str = str .. format(', "Parameters":[{ "Name":"%s","ID":"ID%s" }]',prm,text) end
+		str = str .. '}}'
+		return str
+	end
+	local function _buildJsonLabel(tag,text,top,pos,scr,func)
+		local str = format('{ "Label": { "lang_tag": "%s", "text": "%s" }, ',tag,text)
+		if (IsUI7) and (top == true) then str = str .. '"TopNavigationTab": 1, ' end
+		str = str .. format('"Position": "%s", "TabType": "javascript", "ScriptName": "%s", "Function": "%s" }',pos,scr,func)
+		return str
+	end
+	local function _buildJsonEvent(id,val,text)		
+		local str =format('{ "value": "%s", "HumanFriendlyText": { "lang_tag": "ham_act_id_ch%s", "text": "%s" }}',val,id,text)
+		return str
+	end
+	local function _buildJsonStateIcon(icon,vari,val,sid,path)		
+		local str
+		if (IsUI7) then
+			str = format('{ "img": "%s%s.png", "conditions": [ { "service": "%s", "variable": "%s", "operator": "==","value": %s } ]}',path,icon,sid,vari,val)
+		else
+			str = format('"%s%s.png"',path,icon)
+		end
+		return str
+	end
+	local function _buildJsonButton(btnNum,btnLab,btnID,btnDur,numBtn,isChild)
+		-- Input : Button label, button ID, total number of buttons and if this is a Child device
+		-- Calculate top and left values.
+		-- Need to calculate a pair for the dashboard pannel and device control tab
+		local pTop, pLeft, cTop, cLeft, cWidth, row, col, butWidth, str, newRow
+		str = ''
+		newRow = false
+		if (IsUI7) then
+			if (numBtn == 4) then	-- Two rows, two columns
+				pTop, col = math.modf((btnNum-1) / 2)
+				pLeft = col * 2
+				butWidth =  2
+				if (btnNum == 3) then newRow = true end
+			elseif (numBtn <= 5) then	-- One row, up to five columns
+				pLeft = btnNum-1
+				pTop = 0
+				butWidth =  1 + (5-numBtn)/3
+			elseif (numBtn == 6) then	-- Two rows, three columns
+				pTop, col = math.modf((btnNum-1) / 3)
+				pLeft = col * 3
+				butWidth = 1.66
+				if (btnNum == 4) then newRow = true end
+			elseif (numBtn <= 8) then	-- Two rows, four columns
+				pTop, col = math.modf((btnNum-1) / 4)
+				pLeft = col * 4
+				butWidth = 1.33
+				if (btnNum == 5) then newRow = true end
+			elseif (numBtn <= 10) then	-- Two rows, five columns
+				pTop, col = math.modf((btnNum-1) / 5)
+				pLeft = col * 5
+				butWidth = 1
+				if (btnNum == 6) then newRow = true end
+			elseif (numBtn <= 12) then	-- Three rows, four columns
+				pTop, col = math.modf((btnNum-1) / 4)
+				pLeft = col * 4
+				butWidth = 1.33
+				if (btnNum == 5) or (btnNum == 9) then newRow = true end
+			elseif (numBtn <= 15) then	-- Three rows, five columns
+				pTop, col = math.modf((btnNum-1) / 5)
+				pLeft = col * 5
+				butWidth = 1
+				if (btnNum == 6) or (btnNum == 11) then newRow = true end
+			elseif (numBtn <= 16) then	-- Four rows, four columns
+				pTop, col = math.modf((btnNum-1) / 4)
+				pLeft = col * 4
+				butWidth = 1.33
+				if (btnNum == 5) or (btnNum == 9) or (btnNum == 13) then newRow = true end
+			else						-- Four or five rows, five columns
+				pTop, col = math.modf((btnNum-1) / 5)
+				pLeft = col * 5
+				butWidth = 1
+				if (btnNum == 6) or (btnNum == 11) or (btnNum == 16)  or (btnNum == 21) then newRow = true end
+			end
+			cTop = 45 + (pTop * 25)
+			if (newRow) then str = str .. '{ "ControlGroup": 1, "ControlType": "line_break" },\n'	end
+			cWidth = 65 * butWidth
+			cLeft = 50 + (pLeft * (cWidth + 10))
+		else
+			if (numBtn <= 8) then		-- Two columns
+				pTop, col = math.modf((btnNum-1) / 2)
+				pLeft = col * 2
+			elseif (numBtn <= 12) then	-- Three columns
+				pTop, col = math.modf((btnNum-1) / 3)
+				pLeft = col * 3
+			elseif (numBtn <= 16) then	-- Four columns
+				pTop, col = math.modf((btnNum-1) / 4)
+				pLeft = col * 4
+			elseif (numBtn <= 20) then	-- Five columns
+				pTop, col = math.modf((btnNum-1) / 5)
+				pLeft = col * 5
+			else						-- Six columns
+				pTop, col = math.modf((btnNum-1) / 6)
+				pLeft = col * 6
+			end
+			cWidth = 65
+			cTop = 45 + (pTop * 25)
+			cLeft = 50 + (pLeft * (cWidth + 10))
+		end	
+		str = str .. format('{ "ControlGroup": "1", "ControlType": "button", "top": %d, "left": %d,',pTop,pLeft)
+		if (butWidth ~= 1) and (IsUI7) then
+			str = str .. format('"HorizontalMultiplier": "%s",',butWidth)
+		end
+		str = str .. format('\n"Label": { "text": "%s" },\n',btnLab)
+		if (isChild == false) then
+			str = str .. format('"Display": { "Service": "%s", "Variable": "CurrentActivityID", "Value": "%s", "Top": %s, "Left": %s, "Width": %s, "Height": 20 },\n',Sid,btnID,cTop,cLeft,cWidth)
+			str = str .. format('"Command": { "Service": "%s", "Action": "StartActivity", "Parameters": [{ "Name": "newActivityID", "Value": "%s" }] },\n',Sid,btnID)
+		else
+			if btnDur == '' then btnDur = 0 end
+			str = str .. format('"Display": { "Service": "%s", "Variable": "LastDeviceCommand", "Value": "%s", "Top": %s, "Left": %s, "Width": %s, "Height": 20 },\n',ChSid,btnID,cTop,cLeft,cWidth)
+			str = str .. format('"Command": { "Service": "%s", "Action": "SendDeviceCommand", "Parameters": [{ "Name": "Command", "Value": "%s"},{ "Name": "Duration", "Value": "%s" }] },\n',ChSid,btnID,btnDur)
+		end
+		str = str .. format('"ControlCode": "ham_button%s"\n}',btnNum)
+		return str
+	end
+
+	-- Build the JSON file 
+	local function _writeJsonFile(devID,outf,iconPath,isChild,buttons,childDev)
+		local id, lab, dur, sid
+		local numBtn = #buttons
+		if (isChild == false) then sid = Sid else sid = ChSid end
+		-- For main device default icon is wait so it status is more clear during all reloads.
+		if (IsUI7) then
+			local defIcon
+			if (isChild == false) then defIcon = 'Harmony_75.png' else defIcon = 'Harmony.png' end
+			outf:write(format('{\n"default_icon": "%s%s",\n',iconPath,defIcon))
+		else
+			outf:write(format('{\n"flashicon": "%sHarmony.png",\n',iconPath))
+		end
+		outf:write('"state_icons":[ \n')
+		-- Write status Icon control, skip first image as that is plug in default
+		for i = 2, #iconImages do
+			outf:write(_buildJsonStateIcon(iconImages[i],'IconSet',i-2,sid,iconPath))
+			if (i < #iconImages) then 
+				outf:write(', ')
+			else
+				outf:write(' ],\n')
+			end
+		end	
+		if (IsUI7) then 
+			outf:write(format('"DisplayStatus": { "Service": "%s", "Variable": "IconSet", "MinValue": "0", "MaxValue": "4" },\n',sid)) 
+		end
+		-- Calculate X size of device on screen
+		local x,y,top,tab
+		if (numBtn > 6) then 
+			x,y = math.modf((numBtn + 3) / 4)
+			outf:write(format('"x": "%s",\n"y": "4",\n',x)) 
+		else
+			outf:write('"x": "2",\n"y": "4",\n') 
+		end
+		outf:write('"inScene": "1",\n"ToggleButton": 1,\n"Tabs": [ {\n')
+		outf:write('"Label": { "lang_tag": "tabname_control", "text": "Control" },\n')
+		outf:write('"Position": "0",\n"TabType": "flash",\n')
+		if (IsUI7) then outf:write('"TopNavigationTab": 1,\n') end
+		outf:write('"ControlGroup": [ { "id": "1", "scenegroup": "1", "isSingle": "1" } ],\n')
+		-- Calculate correct SceneGroup size. Size not used in UI7.
+		if (numBtn < 5) then top = 1 else top = 0 end
+		if (numBtn <= 1) then 
+			x = 1 
+			y = 1
+		elseif (numBtn <= 8) then
+			y, x = math.modf((numBtn + 1) / 2)
+			x = 2
+		elseif (numBtn <= 12) then
+			y, x = math.modf((numBtn + 2) / 3)
+			x = 3 
+		else
+			x,y = math.modf((numBtn + 3) / 4)
+			y = 4
+		end
+		outf:write(format('"SceneGroup": [ { "id": "1", "top": "%s", "left": "0", "x": "%s", "y": "%s"} ],\n',top,x,y))
+		outf:write('"Control": [')
+		if (numBtn > 0) then
+			-- Add the buttons
+			for i = 1, #buttons do
+				log.Debug('Adding button %d, label %s' ,i,(buttons[i].Label or 'missing'))
+				outf:write(_buildJsonButton(i,buttons[i].Label, buttons[i].ID, buttons[i].Dur, numBtn, isChild) .. ',\n')
+			end	
+		else
+			if (isChild == false) then
+				outf:write(_buildJsonLabelControl('Configure the harmony Activities on the Activities tab to define control buttons.',50,50,300,20,1,0,0) .. ',\n')
+			else
+				outf:write(_buildJsonLabelControl('Configure the device Command Buttons on the Settings tab to complete configuration.',50,50,300,20,1,0,0) .. ',\n')
+			end	
+		end
+		-- Add other UI elements
+		tab = 1
+		-- Post UI7 we have a different JS UI file then prior versions.
+		local jsFile, jsPfx
+		if (IsUI7) then 
+			jsFile = 'J_Harmony_UI7.js'
+			jsPfx = 'Harmony.'
+		else
+			jsFile = 'J_Harmony.js' 
+			jsPfx = 'ham' 
+		end
+		if (isChild == false) then
+			top = 150
+			if (numBtn > 6) then top = top + 25 end
+			outf:write(_buildJsonLabelControl('Change Channel:',top,50,100,20) .. ',\n')
+			outf:write(_buildJsonInputControl('Change',top,200,30,20) .. ',\n')
+			outf:write(_buildJsonButtonControl('Change','ChangeChannel','newChannel',top,250,80,20) .. ',\n')
+			top = top + 30
+			outf:write(_buildJsonLabelControl('Update Configuration:',top,50,100,20) .. ',\n')
+			outf:write(_buildJsonButtonControl('Update','ForceUpdateConfiguration',nil,top,250,80,20) .. ',\n')
+			top = top + 50
+			outf:write(_buildJsonLabelControl('Hub name:',top,50,100,20) .. ',\n')
+			outf:write(_buildJsonVariableControl('FriendlyName',top,200,150,20) .. ',\n')
+			top = top + 20
+			outf:write(_buildJsonLabelControl('Link Status:',top,50,100,20) .. ',\n')
+			outf:write(_buildJsonVariableControl('LinkStatus',top,200,150,20) .. ',\n')
+			top = top + 20
+			outf:write(_buildJsonLabelControl('Current Activity ID :',top,50,100,20) .. ',\n')
+			outf:write(_buildJsonVariableControl('CurrentActivityID',top,200,80,20) .. ',\n')
+			top = top + 20
+			outf:write(_buildJsonLabelControl('Last command:',top,50,100,20) .. ',\n')
+			outf:write(_buildJsonVariableControl('LastCommand',top,200,80,20) .. ',\n')
+			top = top + 20
+			outf:write(_buildJsonLabelControl('Last command time:',top,50,100,20) .. ',\n')
+			outf:write(_buildJsonVariableControl('LastCommandTime',top,200,80,20) .. ',\n')
+			top = top + 20
+			outf:write(_buildJsonLabelControl('Hub configuration version:',top,50,100,20) .. ',\n')
+			outf:write(_buildJsonVariableControl('HubConfigVersion',top,200,80,20) .. ',\n')
+			top = top + 20
+			outf:write(_buildJsonLabelControl('Hub software version:',top,50,100,20) .. ',\n')
+			outf:write(_buildJsonVariableControl('hubSwVersion',top,200,80,20) .. '\n')
+			outf:write(']},\n')
+			outf:write(_buildJsonLabel('settings','Settings',true,tab,jsFile,jsPfx..'Settings') ..',\n')
+			tab = tab+1
+			outf:write(_buildJsonLabel('activities','Activities',true,tab,jsFile,jsPfx..'Activities') ..',\n')
+			tab = tab+1
+			outf:write(_buildJsonLabel('devices','Devices',true,tab,jsFile,jsPfx..'Devices') ..',\n')
+			tab = tab+1
+		else
+			top = 160
+			if (numBtn > 20) then top = top + 25 end
+			outf:write(_buildJsonLabelControl('Controlling Hub:',top,50,100,20) .. ',\n')
+			local tmpstr = _buildJsonVariableControl('HubName',top,200,80,20)
+			outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
+			top = top + 20
+			outf:write(_buildJsonLabelControl('Last command:',top,50,100,20) .. ',\n')
+			local tmpstr = _buildJsonVariableControl('LastDeviceCommand',top,200,80,20)
+			outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. '\n]},\n')
+			outf:write(_buildJsonLabel('settings','Settings',true,tab,jsFile,jsPfx..'DeviceSettings'),',\n')
+			tab = tab+1
+		end
+		outf:write(_buildJsonLabel('advanced','Advanced',false,tab,'shared.js','advanced_device') ..',\n')
+		outf:write(_buildJsonLabel('logs','Logs',false,tab+1,'shared.js','device_logs') ..',\n')
+		outf:write(_buildJsonLabel('notifications','Notifications',false,tab+2,'shared.js','device_notifications'))
+		if (IsUI7) then outf:write(',\n' .. _buildJsonLabel('ui7_device_scenes','Scenes',false,tab+3,'shared.js','device_scenes')) end
+		outf:write('],\n')
+		outf:write('"eventList2": [ \n')
+		-- Add possible events if we have buttons as well.
+		if (numBtn > 0) then
+			outf:write('{ "id": 1, "label": { "lang_tag": "act_id_ch", "text": ')
+			if isChild then
+				outf:write(format('"Device Command activated"}, "serviceId": "%s",\n',sid))
+			else	
+				outf:write(format('"Harmony Activity is changed to"}, "serviceId": "%s",\n',sid))
+			end
+			outf:write('"norepeat": "1","argumentList": [{ "id": 1, "dataType": "string", "allowedValueList": [\n')
+			for i = 1, #buttons do
+				log.Debug('Adding event %d, label %s' ,i,(buttons[i].Label or 'missing'))
+				local lab = buttons[i].Label or 'missing'
+				local val = buttons[i].ID or 'missing'
+				local str = _buildJsonEvent(i,val,lab)
+				if (i < #buttons) then str = str .. ',' end
+				str = str .. '\n'
+				outf:write(str)
+			end	
+			if isChild then
+				outf:write('], "name": "LastDeviceCommand", "comparisson": "=", "prefix": { "lang_tag": "select_command", "text": "Select command : " }, "suffix": {} } ] },\n')
+			else
+				outf:write('], "name": "CurrentActivityID", "comparisson": "=", "prefix": { "lang_tag": "select_event", "text": "Select activity : " }, "suffix": {} } ] },\n')
+				-- Event for starting activity. Precedes current activity
+				outf:write(format('{ "id": 2, "label": { "lang_tag": "act_id_start", "text": "Harmony is starting Activity"}, "serviceId": "%s",\n',sid))
+				outf:write('"norepeat": "1","argumentList": [{ "id": 1, "dataType": "string", "allowedValueList": [\n')
+				for i = 1, #buttons do
+					log.Debug('Adding event %d, label %s' ,i,(buttons[i].Label or 'missing'))
+					local lab = buttons[i].Label or 'missing'
+					local val = buttons[i].ID or 'missing'
+					local str = _buildJsonEvent(i,val,lab)
+					if (i < #buttons) then str = str .. ',' end
+					str = str .. '\n'
+					outf:write(str)
+				end	
+				outf:write('], "name": "StartingActivityID", "comparisson": "=", "prefix": { "lang_tag": "select_start_event", "text": "Select activity : " }, "suffix": {} } ] },\n')
+				-- Event on activityStatus change
+				outf:write(format('{ "id": 3, "label": { "lang_tag": "hub_status_change", "text": "The Hub status is changing"}, "serviceId": "%s",',sid))
+				outf:write('"norepeat": "1","argumentList": [{ "id": 1, "dataType": "ui1", "defaultValue": "0", "allowedValueList": [')
+				outf:write('{ "Off": "0", "HumanFriendlyText": { "text": "Whenever the _DEVICE_NAME_ is turned off" }},') 
+				outf:write('{ "Starting": "1", "HumanFriendlyText": { "text": "Whenever an Activity is starting on _DEVICE_NAME_" }},')
+				outf:write('{ "On": "2", "HumanFriendlyText": { "text": "Whenever an Activity is active on _DEVICE_NAME_" }},')
+				outf:write('{ "Stopping": "3", "HumanFriendlyText": { "text": "Whenever the _DEVICE_NAME_ is turning off" }}')
+				outf:write('], "name": "activityStatus", "comparisson": "=", "prefix": { "text": "Which status : " }, "suffix": {} } ] },\n')
+
+				-- Event on SwitchPower Status
+				outf:write('{ "id": 4, "label": { "lang_tag": "a_device_is_turned_on_off", "text": "A device is turned on or off"}, "serviceId": "urn:upnp-org:serviceId:SwitchPower1",')
+				outf:write('"norepeat": "1","argumentList": [{ "id": 1, "dataType": "boolean", "defaultValue": "0", "allowedValueList": [')
+				outf:write('{ "Off": "0", "HumanFriendlyText": { "lang_tag": "hft_device_turned_off", "text": "Whenever the _DEVICE_NAME_ is turned off" }},') 
+				outf:write('{ "On": "1", "HumanFriendlyText": { "lang_tag": "hft_device_turned_on", "text": "Whenever the _DEVICE_NAME_ is turned on" }}')
+				outf:write('], "name": "Status", "comparisson": "=", "prefix": { "lang_tag": "ui7_which_mode", "text": "Which mode : " }, "suffix": {} } ] }')
+			end
+		end	
+		outf:write('],\n')
+		if (isChild == false) then
+			if (IsUI7) then outf:write(format('"DeviceType": "urn:schemas-rboer-com:device:Harmony%s:1",\n',devID)) end
+			outf:write(format('"device_type": "urn:schemas-rboer-com:device:Harmony%s:1"\n}\n',devID))
+		else	
+			if (IsUI7) then outf:write(format('"DeviceType": "urn:schemas-rboer-com:device:HarmonyDevice%s_%s:1",\n',Dev,devID)) end
+			outf:write(format('"device_type": "urn:schemas-rboer-com:device:HarmonyDevice%s_%s:1"\n}\n',Dev,devID))
+		end
+		return true
+	end
+
+	-- Create the new Static JSON and compress it unless on openLuup
+	local function _create_JSON_file(devID,name,isChild,buttons,remicons,childDev,prnt_id)
+		local prnt
+		if (prnt_id ~= nil) then prnt = prnt_id..'_' else prnt = '' end
+		local iconPath = locIconURI
+		if (remicons) then iconPath = remIconURI end
+		local jsonOut = FilePath..name..prnt..devID..'.json'
+		local outf = io.open(jsonOut..'X', 'w')
+		local ret = _writeJsonFile(devID,outf,iconPath,isChild,buttons,childDev)
+		outf:close()
+		-- Only make new file when write was successful.
+		if (IsOpenLuup) then 
+			if (ret == true) then os.execute('cp '..jsonOut..'X '..jsonOut) end
+		else	
+			if (ret == true) then os.execute('pluto-lzo c '..jsonOut..'X '..jsonOut..'.lzo') end
+		end	
+		os.execute('rm -f '..jsonOut..'X')
+	end
+
+	-- Re-write the D_Harmony[Device].xml file to point to device specific Static JSON
+	local function _create_D_file(devID,name,prnt_id)
+		local prnt
+		local outf
+		if (prnt_id ~= nil) then prnt = prnt_id..'_' else prnt = '' end
+		local inpath = FilePath .. 'D_'..name..'.xml'
+		local outpath = FilePath .. 'D_'..name..prnt..devID..'.xml'
+		if (IsOpenLuup) then 
+			outf = io.open(outpath..'X', 'w' )
+		else	
+			os.execute('pluto-lzo d '..inpath..'.lzo '..inpath)
+			os.execute('rm -f '..outpath..'.lzo')
+			outf = io.open(outpath, 'w' )
+		end
+
+		for l in io.lines(inpath) do
+			l = string.gsub(l, '\r', '' )
+			l = string.gsub(l, ':device:'..name..':', ':device:'..name..prnt..devID..':')
+			l = string.gsub(l, 'D_'..name..'.json', 'D_'..name..prnt..devID..'.json')
+			outf:write(l..'\n')
+		end
+		outf:close()
+		if (IsOpenLuup) then
+			os.execute('cp '..outpath..'X '..outpath)
+			os.execute('rm -f '..outpath..'X')
+		else	
+			os.execute('pluto-lzo c '..outpath..' '..outpath..'.lzo')
+			os.execute('rm -f '..outpath)
+			os.execute('rm -f '..inpath)
+		end	
+	end
+
+	-- Create CustomModeConfiguration value for preset House mode support.
+	local function _createCustomModeConfiguration(devID, isChild, buttons)
+		local id, lab, dur, sid, cmd, prm
+		local retVal = nil
+		if (isChild == false) then 
+			sid = Sid
+			cmd = "/StartActivity"
+			prm = "/newActivityID="
+		else 
+			sid = ChSid
+			cmd = "/SendDeviceCommand"
+			prm = "/Command="
+		end
+		for i = 1, #buttons do
+			local lab = buttons[i].Label or 'missing'
+			local val = buttons[i].ID or 'missing'
+			local str = lab .. ";CMD" .. val .. ";" .. sid .. cmd .. prm .. val
+			if (i < #buttons) then str = str .. '|' end
+			retVal = (retVal or "") .. str
+		end	
+		return retVal
+	end
+	
+	return {
+		Initialize = _init,
+		CreateDeviceFile = _create_D_file,
+		CreateJSONFile = _create_JSON_file,
+		RemoveObsoleteDeviceFiles = _removeObsoleteChildDeviceFiles,
+		CreateCustomModeConfiguration = _createCustomModeConfiguration
+	}
+end
+
+
+---------------------------------------------------------------------------------------------
+-- Harmony Plugin functions
+---------------------------------------------------------------------------------------------
 -- Set message in task window.
 local function task(text, mode) 
 	local mode = mode or TaskData.ERROR 
 	if (mode ~= TaskData.SUCCESS) then 
 		if (mode == TaskData.ERROR_PERM) then
-			log.Log("task: " .. (text or "no text"), log.LLError) 
+			log.Error("task: %s.",(text or "no text")) 
 		else	
-			log.Log("task: " .. (text or "no text")) 
+			log.Log("task: %s.",(text or "no text")) 
 		end 
 	end 
 	TaskData.taskHandle = luup.task(text, (mode == TaskData.ERROR_PERM) and TaskData.ERROR or mode, TaskData.Description, TaskData.taskHandle) 
 end 
 
--- V2.4 Check how much memory the plug in uses
+-- Check how much memory the plugin uses, and see if we should start/stop polling
 function checkMemory()
-	var.Set("AppMemoryUsed", utils.GetMemoryUsed()) 
 	luup.call_delay("checkMemory", 600)
+	var.Set("AppMemoryUsed", utils.GetMemoryUsed())
 end
 
 -- Set the status Icon
@@ -1035,659 +1788,518 @@ function ClearBusy()
 			luup.call_delay("ClearBusy", 30, "", false)
 		end	
 	end	
-end	
-
--- Open connection socket to Harmony
--- Assuming all inputs are there, no additional checking
--- Return token connected to.
-local function HarmonyAPI(ipAddress, wait)
-	local CommunicationPort = 8088
-	local ERR_CD = { OK = "200", ERR = "503" }
-	local ERR_MSG = { OK = "ok", ERR = "Unknown Harmony response" }
-	local CMD_DATA = { OK = "No Data", ERR = "" }
-	local numberOfMessages = 10	-- Number of messages returned on holdAction command.
-	local timestamp = 10000
-	local ipa = ipAddress
-	--V2.15 option to wait on Hub to fully complete the start of an activity or not.
-	local WaitOnActionStartComplete = wait
-	local isBusy = false
-	local msg_id = 0
-	local remote_id, friendly_name, email, account_id
-
-	
-	-- Get config information from hub. Needed to get HubID for web socket communications.
-	local function GetHubInfo()
-
-        -- Retrieve the harmony Hub information.
-        log.Debug("Retrieving Harmony Hub information.")
-        local url = 'http://'..ipa..':'..CommunicationPort..'/'
-        local request_body = '{"id":1,"cmd":"connect.discoveryinfo?get","params":{}}'
-        local headers = {
-            ['Origin']= 'http://localhost.nebula.myharmony.com',
-            ['Content-Type'] = 'application/json',
-            ['Accept'] = 'application/json',
-            ['Accept-Charset'] = 'utf-8',
-			['Content-Length'] = string.len(request_body)
-        }
-		local result = {}
-		local bdy,cde,hdrs,stts = http.request{
-			url=url, 
-			method='POST',
-			sink=ltn12.sink.table(result),
-			source = ltn12.source.string(request_body),
-			headers = headers
-		}
-		if cde == 200 then
-			local json_response = json.decode(table.concat(result))
-			_friendly_name = json_response['data']['friendlyName']
-			_remote_id = json_response['data']['remoteId']
-			_email = json_response['data']['email']
-			_account_id = json_response['data']['accountId']
-			return _remote_id, _friendly_name, _email, _account_id
-		else
-			return nil, nil, nil, nil
-		end
-	end
-
-	-- Wait for the response for the given message ID
-	-- Max ten attempts
-	local function wait_response(msgid)
-		local maxcnt = numberOfMessages
-		while maxcnt > 1 do
-			maxcnt = maxcnt -1
-			local response, op = ws_client.receive()
-			if response then
---log.Debug("Received response: "..response)
-				local js_res = json.decode(response)
-				if js_res.id == msgid then
-					return true, js_res
-				else
-					log.Log("response is for other message id : ",js_res.id)
-				end
-			end	
-		end
-		-- Should not come here
-		return false, nil
-	end
-
-	-- Send a payload request to Harmony Hub and return json response.
-	-- When resp is nil or true expect a response message
-	local function send_request(command, params, wait_for_response, msgid)
-		local format = string.format
-		local params = params or '{"verb":"get","format":"json"}'
-		local msid
-		if msgid then
-			msid = msgid
-		else
-			msg_id = msg_id+1
-			if msg_id > 999999 then msg_id = 1 end
-			msid = msg_id
-		end
-		local payload = format('{"hubId":%s,"timeout":30,"hbus":{"cmd":"%s","id":%s,"params":%s}}',remote_id,command,msid,params)
---log.Debug("Sending command : "..payload)
-		if ws_client.send(payload) then
-			if wait_for_response ~= false then return wait_response(msid) end
-			return true, nil
-		end	
-		return false, nil
-	end
-
-	-- Open socket to Hub
-	local function Connect()
-		if ((ipa or "") == "") then log.Log("Connect, no IP Address specified ",log.LLError) return false end
-		if not remote_id then
-			remote_id, friendly_name, email, account_id = GetHubInfo(ipa,CommunicationPort)
-			if not remote_id then 
-				log.Log("Connect, failed get configuration details from hub " .. ipa, log.LLError) 
-				return false 
-			end
-			log.Debug("Hub details : "..remote_id..", "..friendly_name..", "..email..", "..account_id)
-		end	
-		if ws_client.is_connected() then
-			log.Debug("We should have websocket open")
-			return true
-		else
-			local res, prot, hdrs = ws_client.connect(ipa,CommunicationPort,"/?domain=svcs.myharmony.com&hubId="..remote_id)
-			if res then
-				local res, _ = send_request("vnd.logitech.connect/vnd.logitech.statedigest?get")
-				if res then
-					return true
-				else	
-					log.Log("Connect, failed to get statedigest hub " .. ipa, log.LLError) 
-				end
-			else	
-				log.Log("Connect, failed to open websocket to hub " .. ipa..", err "..prot, log.LLError) 
---log.Debug("Connect, failed to open websocket to hub " .. ipa..", err "..prot) 
-			end
-			ws_client.close()
-		end	
-		return false
-	end
-
-	-- Submit the command to the Hub and process response string
-	-- Input command = Hub command, id = activity or device ID, devcmd = device command, msgwait if true wait for last message from harmony on startActivity
-	local function SubmitCommand(command, id, devcmd, msgwait, prs)
-		local format = string.format
-
-		if (isBusy) then return ERR_CD.ERR, "BUSY", "Busy with other command" end
-		isBusy = true
-		local msgcnt = 0
-		
-		local cmdStr = ""
-		local params = nil
-		local wait_resp = true
-		-- Build the command string
-		local cmd = (command or "")
-		if (cmd == 'getCurrentActivity') then
-			cmdStr = "vnd.logitech.harmony/vnd.logitech.harmony.engine?getCurrentActivity"
-		elseif (cmd == 'startactivity') then
-			cmdStr = "harmony.activityengine?runactivity"
-			params = format('{"async": "true","timestamp": 0,"args":{"rule":"start"},"activityId":"%s"}',id)
-			timestamp = timestamp + 100
-		elseif (cmd == 'config') then
-			cmdStr = "vnd.logitech.harmony/vnd.logitech.harmony.engine?config"
-		elseif (cmd == 'holdAction') then
-			cmdStr = "vnd.logitech.harmony/vnd.logitech.harmony.engine?holdAction"
-			local action = format('{\\"command\\":\\"%s\\",\\"type\\":\\"IRCommand\\",\\"deviceId\\":\\"%s\\"}', devcmd, id)
-			params = format('{"status":"%s","timestamp":"%s","verb":"render","action":"%s"}',prs,timestamp,action)
-			wait_resp = false
-			if (prs == 'press') then timestamp = timestamp + 54 else timestamp = timestamp + 100 end
-		else	
-			log.Log("SubmitCommand, Unknown command " .. cmd)
-			isBusy = false
-			return ERR_CD.ERR, "Unknown command", cmd
-		end
-		if (timestamp > 90000) then timestamp = 10000 end
-		local cmdResp, msgResp, errCode, errMsg
-		local stat, js_res = send_request(cmdStr,params,wait_resp)
-		if (not stat) then 
-			isBusy = false
-			return ERR_CD.ERR, ERR_MSG.ERR, 'SubmitCommand, failed to send command : '.. cmdStr 
-		end
-		-- At holdAction the Harmony Hub does not return additional data
-		if (cmd == 'holdAction') then 
-			isBusy = false
-			return ERR_CD.OK, ERR_MSG.OK, CMD_DATA.OK 
-		end
-
-		-- For start activity we wait until we get confirmation it got stated
-		local starttime = os.time()
-		HData.LastCommandTime = starttime
-		if WaitOnActionStartComplete and (cmd == 'startactivity') then 
-			local maxcnt = numberOfMessages
-			local done = false
-			while maxcnt > 1 do
-				maxcnt = maxcnt -1
-				if js_res.cmd == nil then
-					-- we need a command respond, get next message
-				elseif js_res.cmd == 'harmony.engine?startActivityFinished' then
-					-- Success response
-					done = true
-				elseif js_res.cmd ~= 'harmony.engine?startActivity' and js_res.cmd ~= 'harmony.engine?helpdiscretes' then
-				elseif js_res.code == 200 then
-					-- Success response
-					done = true
-				elseif js_res.code ~= 100 then
-					-- Only other option is inprocess message and we are not getting that, so fail
-					done = true
-				end	
-				if done then
-					isBusy = false
-					return tostring(js_res.code), js_res.msg, js_res.data
-				else
-					-- try to read next message
-					stat, js_res = wait_response(msg_id)
-				end
-			end	
-			-- We should not come here
-			isBusy = false
-			return ERR_CD.ERR, ERR_MSG.ERR, 'SubmitCommand, failed to get activity start confirmation after max retries.'
-		end
-		-- Other command, so just return what is received from command
-		isBusy = false
-		return tostring(js_res.code), js_res.msg, js_res.data
-	end
-	
-	-- Close socket to Hub
-	local function Close()
-		local res, cd, reason = ws_client.close()
-		if not res then
-			log.Debug("Failed to close websocket, code: "..cd.." reason "..reason)
-		end
-		return true
-	end
-
-	return{ -- Methods
-		Connect = Connect,
-		SubmitCommand = SubmitCommand,
-		Close = Close
-	}
 end
----------------------------------------------------------------------------------------------
--- Harmony Plugin functions
----------------------------------------------------------------------------------------------
--- Update the last command sent to Hub and when
+
+-- Update the last command sent to Hub and when. If cmd is nil then signal an error.
 local function SetLastCommand(cmd)
-	var.Set("LastCommand", cmd)
-	var.Set("LastCommandTime", os.date("%X %a, %d %b %Y"))
-end
-
--- Send the command to the Harmony Hub.
--- Return Status true on success and return string, else false
-local function Harmony_cmd(cmd, id, devCmd, prs)
-	if (Harmony == nil) then 
-		var.Set("LinkStatus","Error")
-		return false, "501", "No handler", " " 
-	end
-	local stat, msg, harmonyOutput
-	log.Debug("Sending command cmd=" .. cmd)
-	local stat = Harmony.Connect()
-	if (stat == true) then 
-		stat, msg, harmonyOutput = Harmony.SubmitCommand(HData.CMD[cmd].cmd, id, devCmd, false, prs)
-		Harmony.Close()
-	else
-		stat = '423'
-		msg = 'Failed to connect to Harmony Hub'
-		harmonyOutput = nil
-	end
-	if (stat == '200') then
-		task("Clearing...", TaskData.SUCCESS)
+	if cmd then
 		var.Set("LinkStatus","Ok")
-		log.Debug("CMD: return value : " .. stat .. ", " .. msg)
-		return true, stat, msg, harmonyOutput
+		var.Set("LastCommand", cmd)
+		var.Set("LastCommandTime", os.date("%X %a, %d %b %Y"))
 	else
 		var.Set("LinkStatus","Error")
-		log.Log("CMD: errcode="  .. stat .. ", errmsg=" .. msg)
-		task("CMD: Failed sending command " .. cmd .. " to Harmony Hub - errorcode="  .. stat .. ", errormessage=" .. msg, TaskData.ERROR)
-		return false, stat, msg, nil
-	end	
-end
-
--- Periodically send the GetCurrentActivity command to see where we are at
--- When PollInterval is zero then do not repeat it.
-function Harmony_PollCurrentActivity()
-	-- See if user want to repeat polling
-	local pollper = var.GetNumber("PollInterval")
-	if (pollper ~= 0) then 
-		luup.call_delay("Harmony_PollCurrentActivity", pollper, "", false)
-		local pollho = var.GetNumber("PollHomeOnly")
-		local house_mode = var.GetAttribute("Mode",0)
-		local cur_act = var.GetNumber("CurrentActivityID")
-		if house_mode == 1 or pollho == 0 or (pollho == 2 and cur_act ~= -1) then
-			-- See if we are not polling too close to start activity. This can give false results
-			if (not GetBusy()) and (os.difftime(os.time(), HData.StartActivityBusy) > 60) then
-				local stat, actID = Harmony_GetCurrentActivtyID()
-				if (stat == true) then 
-					log.Debug('PollCurrentActivity found activity ID : ' .. actID) 
-				else 
-					log.Log('PollCurrentActivity error getting activity') 
-				end
-			else 
-				log.Debug('PollCurrentActivity busy or too close to Activity change') 
-			end
-		else 
-			log.Debug('PollCurrentActivity not at Home so skipping polling.')
-		end
-	else
-		log.Log('PollCurrentActivity stopping polling.',log.LLInfo)
-	end	
-end
-
--- Send Get Config command 
--- When format if JSON return JSON object, else string
-function Harmony_GetConfig(cmd, id, fmt)
-	local message = ''
-	local dataTab = {}
-	log.Debug("GetConfig")
-	local status, cd, msg, confg = Harmony_cmd('get_config')
-	if (status == true) then
-		SetLastCommand(cmd)
-		-- See what part we need to return
-		if (cmd == 'list_activities') then 
-			log.Debug("Activities found : " .. #confg.activity)
-			-- List all activities supported
-			dataTab.activities = {}
-			for i = 1, #confg.activity do
-				dataTab.activities[i] = {}
-				dataTab.activities[i].ID = confg.activity[i].id
-				dataTab.activities[i].Activity = confg.activity[i].label
-			end
-		elseif (cmd == 'list_commands') then
-			log.Debug("Devices found : " .. #confg.device)
-			-- List all Commands from all Devices supported
-			dataTab.commands = {}
-			for i = 1, #confg.device do
-				dataTab.commands[i] = {}
-				dataTab.commands[i].ID = confg.device[i].id
-				dataTab.commands[i].Device = confg.device[i].label
-				dataTab.commands[i].Functions = {}
-				for j = 1, #confg.device[i].controlGroup do
-					dataTab.commands[i].Functions[j] = {}
-					dataTab.commands[i].Functions[j].Function = confg.device[i].controlGroup[j].name
-					dataTab.commands[i].Functions[j].Commands = {}
-					for x = 1, #confg.device[i].controlGroup[j]['function'] do
-						dataTab.commands[i].Functions[j].Commands[x] = {}
-						dataTab.commands[i].Functions[j].Commands[x].Label = confg.device[i].controlGroup[j]['function'][x].label
-						dataTab.commands[i].Functions[j].Commands[x].Name = confg.device[i].controlGroup[j]['function'][x].name
-						dataTab.commands[i].Functions[j].Commands[x].Action = json.decode(confg.device[i].controlGroup[j]['function'][x].action).command
-					end
-				end	
-			end
-		elseif (cmd == 'list_devices') then 
-			log.Debug("Devices found : " .. #confg.device)
-			-- List all devices supported
-			dataTab.devices = {}
-			for i = 1, #confg.device do
-				dataTab.devices[i] = {}
-				dataTab.devices[i].ID = confg.device[i].id
-				dataTab.devices[i].Device = confg.device[i].label
-				dataTab.devices[i].Model = confg.device[i].model
-				dataTab.devices[i].Manufacturer = confg.device[i].manufacturer
-			end
-		elseif (cmd == 'list_device_commands') then
-			log.Debug("Devices found : " .. #confg.device)
-			-- List all commands supported by given device grouped by function
-			for i = 1, #confg.device do
-				if (confg.device[i].id == id) then
-					dataTab.ID = confg.device[i].id
-					dataTab.Device = confg.device[i].label
-					dataTab.Functions = {}
-					for j = 1, #confg.device[i].controlGroup do
-						dataTab.Functions[j] = {}
-						dataTab.Functions[j].Function = confg.device[i].controlGroup[j].name
-						dataTab.Functions[j].Commands = {}
-						for x = 1, #confg.device[i].controlGroup[j]['function'] do
-							dataTab.Functions[j].Commands[x] = {}
-							dataTab.Functions[j].Commands[x].Label = confg.device[i].controlGroup[j]['function'][x].label
-							dataTab.Functions[j].Commands[x].Name = confg.device[i].controlGroup[j]['function'][x].name
-							dataTab.Functions[j].Commands[x].Action = json.decode(confg.device[i].controlGroup[j]['function'][x].action).command
-						end
-					end	
-					break
-				end	
-			end
-		elseif (cmd == 'list_device_commands_shrt') then
-			log.Debug("Devices found : " .. #confg.device)
-			-- List all commands supported by given device
-			dataTab.devicecommands = {} 
-			for i = 1, #confg.device do
-				if (confg.device[i].id == id) then
-					local iCnt = 1
-					for j = 1, #confg.device[i].controlGroup do
-						for x = 1, #confg.device[i].controlGroup[j]['function'] do
-							dataTab.devicecommands[iCnt] = {} 
-							dataTab.devicecommands[iCnt].Label = confg.device[i].controlGroup[j]['function'][x].label
-							dataTab.devicecommands[iCnt].Name = confg.device[i].controlGroup[j]['function'][x].name
-							dataTab.devicecommands[iCnt].Action = json.decode(confg.device[i].controlGroup[j]['function'][x].action).command
-							iCnt = iCnt + 1
-						end
-					end
-					break
-				end	
-			end
-		elseif (cmd == 'get_config') then
-			-- List full configuration
-			dataTab = confg
-		end
-	else
-		message = " failed to send GetConfig command...  errorcode="  .. cd .. ", errormessage=" .. msg
 	end
-	-- If we had an error return that
-	if (status == false) then 
-		log.Log("GetConfig, " .. message) 
-		dataTab.status = HData.ER 
-		dataTab.message = message
-		return false, dataTab 
-	else
-		return true, dataTab
+end
+
+-- Update the plugin activity parameters just started
+local function UpdateCurrentActivity(actID)
+	var.Set("CurrentActivityID", actID)
+	-- Set the target and status so we can show off/on on Vera App
+	if (tonumber(actID) ~= -1) then 
+		var.Set("Target", "1", HData.SIDS.SP)
+		var.Set("Status", "1", HData.SIDS.SP)
+	else 
+		var.Set("Target", "0", HData.SIDS.SP)
+		var.Set("Status", "0", HData.SIDS.SP)
+	end
+end
+
+-- Find the activity with the name and return the matching actibity ID
+function Harmony_FindActivityByName(name)
+	if name then
+		-- If we get a number, then assume it is an ID already
+		if tonumber(name,10) then 
+			var.Set("findResult", name)  -- Need variable to have return value in call_action
+			return true, name 
+		end
+		local acts = var.Get("Activities")
+		local act_js = json.decode(acts)
+		for i=1,#act_js.activities do
+			if act_js.activities[i].Activity == name then
+				var.Set("findResult", act_js.activities[i].ID)  -- Need variable to have return value in call_action
+				return true, act_js.activities[i].ID
+			end
+		end 
 	end	
+	var.Set("findResult", "")  -- Need variable to have return value in call_action
+	return false, ""
+end
+
+-- Find the activity with the id and return the matching activity name
+function Harmony_FindActivityByID(id)
+	if id then
+		local acts = var.Get("Activities")
+		local act_js = json.decode(acts)
+		for i=1,#act_js.activities do
+			if act_js.activities[i].ID == id then
+				var.Set("findResult", act_js.activities[i].Activity)  -- Need variable to have return value in call_action
+				return true, act_js.activities[i].Activity
+			end
+		end 
+	end	
+	var.Set("findResult", "")  -- Need variable to have return value in call_action
+	return false, ""
+end
+
+-- Find the device with the name and return the matching device ID
+function Harmony_FindDeviceByName(name)
+	if name then
+		-- If we get a number, then assume it is an ID already
+		if tonumber(name,10) then 
+			var.Set("findResult", name)  -- Need variable to have return value in call_action
+			return true, name 
+		end
+		local devs = var.Get("Devices")
+		local dev_js = json.decode(devs)
+		for i=1,#dev_js.devices do
+			if dev_js.devices[i].Device == name then
+log.Debug("..FindDeviceByName..%s",dev_js.devices[i].ID)		
+				var.Set("findResult", dev_js.devices[i].ID)  -- Need variable to have return value in call_action
+				return true, dev_js.devices[i].ID
+			end
+		end 
+	end	
+	var.Set("findResult", "")  -- Need variable to have return value in call_action
+	return false, ""
+end
+
+-- Find the device with the id and return the matching device name
+function Harmony_FindDeviceByID(id)
+	if id then
+		local devs = var.Get("Devices")
+		local dev_js = json.decode(devs)
+		for i=1,#dev_js.devices do
+			if dev_js.devices[i].ID == id then
+				var.Set("findResult", dev_js.devices[i].Device)  -- Need variable to have return value in call_action
+				return true, dev_js.devices[i].Device
+			end
+		end 
+	end	
+	var.Set("findResult", "")  -- Need variable to have return value in call_action
+	return false, ""
+end
+
+-- Update the polling flag. If called with "1" then the connection with the Hub will be kept open, else it will close after each command.
+-- If Polling is on and turned off, wait for the hub to be off (current activity == -1)
+function Harmony_SetHubPolling(poll_flg)
+	if type(poll_flg) == "string" then poll_flg = (poll_flg == "1") end
+	local change_poll = true
+	if (not poll_flg) and Harmony.GetHubPolling() then
+		-- Want turn off polling, make sure all is powerd off.
+		local actid = var.GetNumber("CurrentActivityID")
+		if actid ~= -1 then
+			change_poll = false
+			-- retry in a minute
+			luup.call_delay("Harmony_SetHubPolling", 60, "0")
+			log.Debug("Hub still on, so post pone polling stop.")
+		end	
+	end
+	if change_poll then
+		Harmony.SetHubPolling(poll_flg)
+		if poll_flg then
+			log.Debug("Turning on polling")
+		else	
+			log.Debug("Turning off polling")
+		end	
+	end	
+end
+
+-- Get the latest configuration from the Hub and update our internals
+function Harmony_UpdateConfigurations()
+	if (GetBusy()) then 
+		log.Warning("UpdateConfigurations communication is busy")
+		return nil, nil, 307,"Communication is busy."
+	end
+	SetBusy(true, true)
+	local res, data, cde, msg = Harmony.GetConfig()
+	if res then
+		data = data.data
+		local dataTab = {}
+		-- Get activities
+		dataTab.activities = {}
+		log.Debug("Number of activities found : %d.",#data.activity)
+		for i = 1, #data.activity do
+			dataTab.activities[i] = {}
+			dataTab.activities[i].ID = data.activity[i].id
+			dataTab.activities[i].Activity = data.activity[i].label
+		end
+		var.Set("Activities", json.encode(dataTab))
+		-- Get devices 
+		dataTab = {}
+		dataTab.devices = {}
+		log.Debug("Number of devices found : %d.",#data.device)
+		for i = 1, #data.device do
+			dataTab.devices[i] = {}
+			dataTab.devices[i].ID = data.device[i].id
+			dataTab.devices[i].Device = data.device[i].label
+			dataTab.devices[i].Model = data.device[i].model
+			dataTab.devices[i].Manufacturer = data.device[i].manufacturer
+		end
+		var.Set("Devices", json.encode(dataTab))
+		-- Get commands for child devices
+		for k, v in pairs(luup.devices) do
+			if var.GetAttribute ('id_parent', k ) == HData.DEVICE then
+				local devID = var.Get("DeviceID", HData.SIDS.CHILD, k)
+				log.Debug("Found child device with id %s, get commands...",devID)
+				dataTab = {}
+				dataTab.Functions = {}
+				-- List all commands supported by given device grouped by function
+				for i = 1, #data.device do
+					if (data.device[i].id == devID) then
+						dataTab.ID = data.device[i].id
+						dataTab.Device = data.device[i].label
+						-- Store URI for DigitalMediaServer (= Sonos)
+-- to do v3.1						
+--						if data.device[i].['type'] == "DigitalMusicServer" then
+--							dataTab.deviceProfileUri = data.device[i].deviceProfileUri
+--						end
+						dataTab.Functions = {}
+						for j = 1, #data.device[i].controlGroup do
+							dataTab.Functions[j] = {}
+							dataTab.Functions[j].Function = data.device[i].controlGroup[j].name
+							dataTab.Functions[j].Commands = {}
+							for x = 1, #data.device[i].controlGroup[j]['function'] do
+								dataTab.Functions[j].Commands[x] = {}
+								dataTab.Functions[j].Commands[x].Label = data.device[i].controlGroup[j]['function'][x].label
+								dataTab.Functions[j].Commands[x].Name = data.device[i].controlGroup[j]['function'][x].name
+								dataTab.Functions[j].Commands[x].Action = json.decode(data.device[i].controlGroup[j]['function'][x].action).command
+							end
+						end	
+						var.Set("DeviceCommands", json.encode(dataTab),HData.SIDS.CHILD, k )
+						break
+					end	
+				end
+			end
+		end	
+		-- Content, used for cmd proxy.resource?get
+		if data.content.householdUserProfileUri then
+			var.Set("householdUserProfileUri", data.content.householdUserProfileUri)
+		end
+	else
+		log.Error("Failed to get new configuration from Hub. Error : %d, %s.",cde, msg or "")
+	end
+	SetBusy(false, true)
+	if res then
+		SetLastCommand("GetConfig")
+	else
+		SetLastCommand()
+	end
+	return res, "", cde, msg
+end
+
+-- Get Config stored, refresh is needed
+function Harmony_GetConfig(cmd, id, devID)
+	log.Debug("GetConfig "..cmd)
+	
+	if (HData.Plugin_Disabled == true) then
+		log.Warning("GetConfig : Plugin disabled.")
+		return nil, nil, 503, "Plugin disabled."
+	end
+	-- See what part we need to return
+	if (cmd == 'list_activities') then 
+		-- See if we have the activities
+		local activities = var.Get("Activities")
+		if activities == "" then 
+			-- Nope update them, update will store in variable
+			local res, data, cde, msg = Harmony_UpdateConfigurations()
+			if res then 
+				activities = var.Get("Activities")
+			end
+		end
+		if activities ~= "" then 
+			return true, json.decode(activities)
+		else
+			return nil, nil, 404, "No activities found."
+		end	
+	elseif (cmd == 'list_devices') then 
+		local devices = var.Get("Devices")
+		if devices == "" then
+			-- Nope update them, update will store in variable
+			local res, data, cde, msg = Harmony_UpdateConfigurations()
+			if res then 
+				devices = var.Get("Devices")
+			end
+		end	
+		if devices ~= "" then
+			return true, json.decode(devices)
+		else
+			return nil, nil, 404, "No devices found."
+		end	
+	elseif (cmd == 'list_device_commands') then
+		-- if we do net get the vera device ID but Hub device ID then search for vera one.
+		if not devID then
+			local altid = 'HAM'..HData.DEVICE..'_'..id
+			for k, v in pairs(luup.devices) do
+				if v.id == altid then
+					devID = k
+					break
+				end
+			end
+			log.Debug("Looked up missing devID for %s, found ",id,(devID or "nil"))
+		end
+		-- See if child device has the current config
+		local commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
+		if commands == "" then
+			-- Nope update them, update will store in variable
+			local res, data, cde, msg = Harmony_UpdateConfigurations()
+			if res then 
+				commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
+			end
+		end	
+		if commands ~= "" then
+			return true, json.decode(commands)
+		else
+			return nil, nil, 404, "No commands found."
+		end	
+	elseif (cmd == 'get_config') then
+		-- List full configuration, we do not store it, so no known version.
+		SetLastCommand("GetConfig")
+		local res, data, cde, msg = Harmony.GetConfig()
+		if not res then 
+			SetLastCommand() 
+		end
+		return res, data, cde, msg
+	end
 end
 
 -- Send IssueDeviceCommand to Harmony Hub
--- Input: devID = device ID, devCmd = device Command, devDur = key-press duration in seconds, hnd = true when called from HTTPhandler
--- Output: True on success, or JSON when called from HTTPhandler
-function Harmony_IssueDeviceCommand(devID, devCmd, devDur, hnd, fmt)
+-- Input: devID = device ID, devCmd = device Command, devDur = key-press duration in seconds
+-- Output: True on success
+function Harmony_IssueDeviceCommand(dev, devCmd, devDur)
 	if (HData.Plugin_Disabled == true) then
-		log.Log("IssueDeviceCommand : Plugin disabled.",log.LLWarning)
-		return true
+		log.Warning("IssueDeviceCommand : Plugin disabled.")
+		return nil, nil, 503,"Plugin disabled."
 	end
-	local cmd = 'issue_device_command'
-	local status, cd, msg, harmonyOutput
-	local message = ''
+	if (GetBusy()) then 
+		log.Warning("IssueDeviceCommand communication is busy")
+		return nil, nil, 307,"Communication is busy."
+	end
 	local dur = tonumber(devDur) or 0
-	local hnd = hnd or false
-	-- When not called from HTTP Request handler, set busy status
-	if (hnd == false) then 
-		if (GetBusy()) then
-			log.Debug("IssueDeviceCommand communication is busy")
-			return false 
-		end
+	if ((dev ~= "") and (devCmd ~= "")) then 
 		SetBusy(true, true)
-	end
-	log.Debug("IssueDeviceCommand, devID : " .. devID .. ", devCmd : " .. devCmd .. ", devDur : " .. dur)
-	if ((devID ~= "") and (devCmd ~= "")) then 
-		status, cd, msg, harmonyOutput = Harmony_cmd(cmd, devID, devCmd, 'press')
-		-- Send hold commands each half second if there is to be a longer key press. Max is 15 seconds.
-		if (dur ~= 0) then
-			local till = os.time() + dur -1
-			repeat 
-				luup.sleep(500)
-				status, cd, msg, harmonyOutput = Harmony_cmd(cmd, devID, devCmd, 'hold')
-			until (os.time() > till)
-		end
-		status, cd, msg, harmonyOutput = Harmony_cmd(cmd, devID, devCmd, 'release')
-		if (status == true) then
-			SetLastCommand(cmd)
+		local res1, devID = Harmony_FindDeviceByName(dev)
+		local res, data, cde, msg = nil, nil, 404, ""
+		if res1 then
+			log.Debug("IssueDeviceCommand, devID : %s, Cmd %s, Dur %s.",devID,devCmd,dur)
+			res, data, cde, msg = Harmony.IssueDeviceCommand(devID, devCmd, dur, 'press')
+			if res then
+				SetLastCommand("IssueDeviceCommand")
+			end	
 		else
-			message = "failed to Issue Device Command...  errorcode="  .. cd .. ", errormessage=" .. msg
-		end	
-	else
-		message = "no DeviceID and/or Command specified... "
-		status = false
-	end	
-	if (status == false) then log.Log("ERROR: IssueDeviceCommand, " .. message) end
-	if (hnd == false) then
-		-- When not called from HTTP Request handler, clear busy status
-		SetBusy(false, true)
-		return status
-	else
-		-- Return status object to HTTP handler.
-		local dataTab = {}
-		if (status == true) then 
-			dataTab.status = HData.OK 
-			dataTab.message = HData.MSG_OK
-		else 
-			dataTab.status = HData.ER 
-			dataTab.message = message
+			cde = 404
+			msg = "not a valid device: "..(dev or "missing")
 		end
-		return status, dataTab
+		SetBusy(false, true)
+		return res, data, cde, msg
+	else
+		return nil, nil, 404, "no DeviceID and/or Command specified"
 	end	
 end
 
 -- Send GetCurrentActivtyID to Harmony Hub
--- Input: hnd = true when called from HTTPhandler
--- Output: Activity ID on success, or JSON when called from HTTPhandler
-function Harmony_GetCurrentActivtyID(hnd, fmt)
+-- Output: Activity ID on success
+function Harmony_GetCurrentActivtyID()
 	if (HData.Plugin_Disabled == true) then
-		log.Log("GetCurrentActivtyID : Plugin disabled.",log.LLWarning)
-		return true, "Plugin Disabled"
+		log.Warning("GetCurrentActivtyID : Plugin disabled.")
+		return nil, nil, 503,"Plugin disabled."
 	end
-	local cmd = 'get_current_activity_id'
-	local message = ''
-	local currentActivity = ''
-	local hnd = hnd or false
-	-- When not called from HTTP Request handler, set busy status
-	if (hnd == false) then 
-		if (GetBusy()) then 
-			log.Log("GetCurrentActivtyID communication is busy")
-			return false 
-		end
-		SetBusy(true, true)
+	if (GetBusy()) then 
+		log.Warning("GetCurrentActivity communication is busy")
+		return nil, nil, 307,"Communication is busy."
 	end
-	log.Debug("GetCurrentActivtyID")
-	local status, cd, msg, harmonyOutput = Harmony_cmd(cmd)
-	if (status == true) then
-		currentActivity = harmonyOutput.result or ''
-		if (tonumber(currentActivity)) then
-			SetLastCommand(cmd)
-			log.Debug("GetCurrentActivtyID found activity : " .. currentActivity)
-			var.Set("CurrentActivityID", currentActivity)
-			-- Set the target and activity so we can show off/on on Vera App
-			if (currentActivity ~= '-1') then 
-				var.Set("Target", "1", HData.SIDS.SP)
-				var.Set("Status", "1", HData.SIDS.SP)
-			else 
-				var.Set("Target", "0", HData.SIDS.SP)
-				var.Set("Status", "0", HData.SIDS.SP)
-			end
-		else
-			message = "failed to Get Current Activity...  errorcode="  .. cd .. ", errormessage=" .. msg
-			log.Log("GetCurrentActivtyID, ERROR " .. message) 
-			status = false
-		end
-	else
-		message = "failed to Get Current Activity...  errorcode="  .. cd .. ", errormessage=" .. msg
-		log.Log("GetCurrentActivtyID, ERROR " .. message) 
-	end	
-	if (hnd == false) then
-		-- When not called from HTTP Request handler, clear busy status
-		SetBusy(false,false)
-		setStatusIcon(HData.Icon.IDLE)
-		return status, currentActivity
-	else
-		local dataTab = {}
-		dataTab.currentactivityid = currentActivity
-		if (status) then 
+	log.Debug("GetCurrentActivtyID: Start")
+	SetBusy(true, true)
+	local res, data, cde, msg = Harmony.GetCurrentActivtyID()
+	if res then
+		if (tonumber(data)) then
+			log.Debug("GetCurrentActivtyID found activity : %s.",data)
+			UpdateCurrentActivity(data)
+			local dataTab = {}
 			dataTab.status = HData.OK
-			dataTab.message = HData.MSG_OK
-		else 
-			dataTab.status = HData.ER 
-			dataTab.message = message
-		end
-		return status, dataTab
-	end	
+			dataTab.currentActivityID = data
+			local res1, act = Harmony_FindActivityByID(data)
+			if res1 then
+				dataTab.currentActivityLabel = act
+			else
+				dataTab.currentActivityLabel = ""
+			end
+			SetLastCommand("GetCurrentActivtyID")
+		else
+			res = nil
+			data = nil
+			msg = "Returned Activity is not a number."
+			cde = 500
+		end	
+	else
+		log.Error("GetCurrentActivtyID failed, %d, %s.",cde,msg) 
+	end
+	SetBusy(false, true)
+	return res, data, cde, msg
+end
+
+-- Send GetStateDigest to Harmony Hub
+-- Output: Activity ID on success
+function Harmony_GetStateDigest()
+	if (HData.Plugin_Disabled == true) then
+		log.Warning("GetStateDigest : Plugin disabled.")
+		return nil, nil, 503,"Plugin disabled."
+	end
+	if (GetBusy()) then 
+		log.Warning("GetStateDigest communication is busy")
+		return nil, nil, 307,"Communication is busy."
+	end
+	log.Debug("GetStateDigest: Start")
+	SetBusy(true, true)
+	local res, data, cde, msg = Harmony.GetStateDigest()
+	if res then
+	else
+		log.Error("GetCurrentActivtyID failed, %d, %s.",cde,msg) 
+	end
+	SetBusy(false, true)
+	return res, data, cde, msg
 end
 
 -- Send StartActivity to Harmony Hub
--- Input: actID = activity ID, hnd = true when called from HTTPhandler
--- Output: True on success, or JSON when called from HTTPhandler
-function Harmony_StartActivity(actID, hnd, fmt)
+-- Input: actID = activity ID
+-- Output: True on success, on failure with data on details
+function Harmony_StartActivity(act)
 	if (HData.Plugin_Disabled == true) then
-		log.Log("StartActivity : Plugin disabled.",log.LLWarning)
-		return true
+		log.Warning("StartActivity : Plugin disabled.")
+		return nil, nil, 503,"Plugin disabled."
 	end
-	-- 2.13, do not repeat sending if activity is already the current.
-	if (var.GetNumber("PollInterval") ~= 0) then
-		local curActID = var.GetNumber("CurrentActivityID")
-		if (curActID == tonumber(actID)) then
-			local message = "Activity "..actID.." is the same as the current one. Not resending."
-			log.Debug("StartActivity : "..message)
-			if (hnd == false) then
-				return true
-			else
-				local dataTab = {}
-				dataTab.status = HData.ER 
-				dataTab.message = message
-				dataTab.activity = actID
-				return true, dataTab
-			end
-		end
+	if (GetBusy()) then 
+		log.Warning("StartActivity communication is busy")
+		return nil, nil, 307,"Communication is busy."
 	end
-	local cmd = 'start_activity'
-	local message = ''
-	local harmonyOutput = ''
-	local status = false
-	local hnd = hnd or false
-	
-	-- Timer so we won't do a poll too soon after start activity complete to avoid false results
-	HData.StartActivityBusy = os.time()
-	-- When not called from HTTP Request handler, set busy status
-	if (hnd == false) then 
-		if (GetBusy()) then 
-			log.Debug("StartActivity communication is busy")
-			return false 
-		end
+	local act = act or ""
+	log.Debug("StartActivity, newActivityID : %s.",act)
+	if (act ~= "") then 
+		local res, data, cde, msg = nil, nil, 404, ""
 		SetBusy(true, true)
-	end
-	log.Debug("StartActivity, newActivityID : " .. actID)
-	if (actID ~= "") then 
-		-- Start activity
-		log.Debug("StartActivity, ActivityID : " .. actID)
-		-- Set value now to give quicker user feedback on UI
-		status, cd, msg, harmonyOutput = Harmony_cmd (cmd, actID)
-		if (status == true) then
-			var.Set("CurrentActivityID", actID)
-			-- Set the target and activity so we can show off/on on Vera App
-			if (actID ~= '-1') then 
-				var.Set("Target", "1", HData.SIDS.SP)
-				var.Set("Status", "1", HData.SIDS.SP)
-			else 
-				var.Set("Target", "0", HData.SIDS.SP)
-				var.Set("Status", "0", HData.SIDS.SP)
-			end
-			SetLastCommand(cmd)
+		local res1, aid = Harmony_FindActivityByName(act)
+		if not res1 then
+			message = "not a valid Activity " .. act
 		else
-			message = "failed to start Activity... errorcode="  .. cd .. ", errormessage=" .. msg
+			res, data, cde, msg = Harmony.StartActivity(aid)
+			if res then
+				UpdateCurrentActivity(aid)
+				SetLastCommand("StartActivity")
+			else
+				log.Error("StartActivity, ERROR %d, %s.",cde,msg)
+			end	
 		end	
-	else
-		message = "no newActivityID specified... "
-	end	
-	if (status == false) then log.Log("StartActivity, ERROR " .. message) end
-	HData.StartActivityBusy = os.time()
-	if (hnd == false) then
-		-- When not called from HTTP Request handler, clear busy status
 		SetBusy(false,true)
-		return status
+		return res, data, cde, msg
 	else
-		local dataTab = {}
-		if (status == true) then 
-			dataTab.status = HData.OK 
-			dataTab.message = HData.MSG_OK
-			dataTab.activity = actID
-		else 
-			dataTab.status = HData.ER 
-			dataTab.message = message
-			dataTab.activity = ""
-		end
-		return status, dataTab
+		return nil, nil, 404, "no newActivityID specified"
 	end	
 end
 
+-- Send Activity -1 (PowerOff) to Harmony Hub
+-- Output: True on success, on failure with data on details
+function Harmony_PowerOff()
+	if (HData.Plugin_Disabled == true) then
+		log.Warning("PowerOff : Plugin disabled.")
+		return nil, nil, 503,"Plugin disabled."
+	end
+	if (GetBusy()) then 
+		log.Warning("PowerOff communication is busy")
+		return nil, nil, 307,"Communication is busy."
+	end
+	SetBusy(true, true)
+	local res, data, cde, msg = Harmony.StartActivity(-1)
+	if res then
+		UpdateCurrentActivity(-1)
+		SetLastCommand("PowerOff")
+	else
+		log.Error("PowerOff, ERROR %d, %s.",cde,msg)
+	end	
+	SetBusy(false,true)
+	return res, data, cde, msg
+end
+
+-- Send ChangeChannel to Harmony Hub
+-- Input: newChannel = new Channel number to select
+-- Output: True on success, or JSON when called from HTTPhandler
+function Harmony_ChangeChannel(newChannel)
+	if (HData.Plugin_Disabled == true) then
+		log.Warning("ChangeChannel : Plugin disabled.")
+		return nil, nil, 503,"Plugin disabled."
+	end
+	if (GetBusy()) then 
+		log.Warning("ChangeChannel communication is busy")
+		return nil, nil, 307,"Communication is busy."
+	end
+	local chnl = newChannel or ""
+	log.Debug("ChangeChannel, newChannel : %s.",chnl)
+	if (chnl ~= "") then 
+		SetBusy(true, true)
+		-- Set value now to give quicker user feedback on UI
+		local res, data, cde, msg = Harmony.ChangeChannel(chnl)
+		if res then
+			SetLastCommand("ChangeChannel")
+		else
+			log.Error("ChangeChannel, ERROR %d, %s.",cde,msg)
+		end	
+		SetBusy(false,true)
+		return res, data, cde, msg
+	else
+		return nil, nil, 404, "no newChannel specified"
+	end	
+end
+
+-- Send a key-press comamnd from a child device that maps to a Hub device.
 --  devDur = key-press duration in seconds
 function Harmony_SendDeviceCommand(lul_device,devCmd,devDur)
 	if (HData.Plugin_Disabled == true) then
-		log.Log("SendDeviceCommand : Plugin disabled.",log.LLWarning)
-		return true
+		log.Warning("SendDeviceCommand : Plugin disabled.")
+		return nil, nil, 503,"Plugin disabled."
 	end
 	local cmd = (devCmd or "")
 	local dur = (devDur or "0")
 	local devID = var.Get("DeviceID", HData.SIDS.CHILD, lul_device)
 	local prevCmd = var.Get("LastDeviceCommand", HData.SIDS.CHILD, lul_device)
-	log.Debug("SendDeviceCommand "..cmd.." for device #"..lul_device.." to Harmony Device "..devID)
+	log.Debug("SendDeviceCommand "..cmd.." for device #"..lul_device.." to Harmony Device "..devID.." holding down for "..dur)
 	var.Set("LastDeviceCommand", cmd, HData.SIDS.CHILD, lul_device)
 	local starttime = os.time()
 	setStatusIcon(HData.Icon.BUSY, lul_device, HData.SIDS.CHILD)
-	local status = Harmony_IssueDeviceCommand(devID, cmd, dur)
-	-- see if user want to show the button status for a tad longer
-	local idleDelay = var.GetNumber("OkInterval")
-	if (idleDelay > 0) then
-		luup.call_delay('Harmony_SendDeviceCommandEnd',idleDelay, tostring(lul_device), false)
+	local res, data, cde, msg = Harmony_IssueDeviceCommand(devID, cmd, dur)
+	if res then
+		-- see if user want to show the button status for a tad longer
+		local idleDelay = var.GetNumber("OkInterval")
+		if (idleDelay > 0) then
+			luup.call_delay('Harmony_SendDeviceCommandEnd',idleDelay, tostring(lul_device))
+		else
+			setStatusIcon(HData.Icon.IDLE, lul_device, HData.SIDS.CHILD)
+			var.Set("LastDeviceCommand", "", HData.SIDS.CHILD, lul_device)
+		end
 	else
+		log.Error("IssuingDeviceCommand ERROR %d, %s.",cde,msg)
 		setStatusIcon(HData.Icon.IDLE, lul_device, HData.SIDS.CHILD)
 		var.Set("LastDeviceCommand", "", HData.SIDS.CHILD, lul_device)
-	end
-	return status
+	end	
+	return res, data, cde, msg
 end
 
 -- Clear the last device command after no button has been clicked for more then OkInterval seconds
 function Harmony_SendDeviceCommandEnd(devID)
-	log.Debug('SendDeviceCommandEnd for child device #'..devID)
 	if (devID == nil) then return end
 	if (devID == '') then return end
+	log.Debug('SendDeviceCommandEnd for child device #%s.',devID)
 	local lul_device = tonumber(devID)
 	local value, tstamp = luup.variable_get(HData.SIDS.CHILD, "LastDeviceCommand", lul_device)
 	value = value or ""
-	log.Log('LastDeviceCommand current value'..value)
+	log.Log('LastDeviceCommand current value %s.',value)
 	if (value ~= "") then
 		local idleDelay = var.GetNumber("OkInterval")
 		if (idleDelay > 0) then
@@ -1705,593 +2317,121 @@ function Harmony_SendDeviceCommandEnd(devID)
 end
 
 -- Public HTTP request handler
--- Parameters : ?al_Harmony&cmd=command&cmdP1=Primary command parameter&cmdP2=Secondary command parameter&cmdP3=Tertiary command parameter
+-- Parameters : ?lr_Harmony&cmd=command&cmdP1=Primary command parameter&cmdP2=Secondary command parameter&cmdP3=Tertiary command parameter
 -- Eg:	cmd=Get_Current_Activity_ID
 --		cmd=Start_Activity&cmdP1=12345678
 --		cmd=Issue_Device_Command&cmdP1=23456789&cmdP2=VolumeUp&cmdP3=0
-function HTTP_Harmony (lul_request, lul_parameters, lul_outputformat)
-	local cmd = 'get_config'
-	local outFormat = HData.PL
+function HTTP_Harmony (lul_request, lul_parameters)
+	local cmd = ''
 	local cmdp1 = ''
 	local cmdp2 = ''
 	local cmdp3 = ''
-	log.Debug('request is: '..tostring(lul_request))
+	log.Debug('HTTP request is: %s.',tostring(lul_request))
 	for k,v in pairs(lul_parameters) do 
-		log.Log ('parameters are: '..tostring(k)..'='..tostring(v)) 
+		log.Log('Parameters : %s=%s.',tostring(k),tostring(v)) 
 		k = k:lower()
 		if (k == 'cmd') then cmd = v 
-		elseif (k == 'format') then outFormat = v 
-		elseif (k == 'cmdp1') then cmdp1 = v 
-		elseif (k == 'cmdp2') then cmdp2 = v 
+		elseif (k == 'cmdp1') then cmdp1 = v:gsub('"', '')
+		elseif (k == 'cmdp2') then cmdp2 = v:gsub('"', '')
 		elseif (k == 'cmdp3') then cmdp3 = v 
 		end
 	end
-	log.Debug('outputformat is: '..outFormat)
-	if (GetBusy()) then
-		log.Log('we are busy..fail... ')
-		if (outFormat == HData.PL) then 
-			return "ERROR: Busy performing another command, please retry in a bit"
-		else
-			return '{ "ERROR": "Busy performing another command, please retry in a bit" }'
-		end
-	end
-	SetBusy(true,true)
-	local function exec (cmd, outFormat, cmdp1,cmdp2,cmdp3)
-		local retStat, retVal
-		
-		if (cmd == 'list_activities') or (cmd == 'list_commands') or (cmd == 'list_devices') or (cmd == 'list_device_commands') or (cmd == 'list_device_commands_shrt') or (cmd == 'get_config') then 
-			retStat, retVal = Harmony_GetConfig(cmd, cmdp1, outFormat) 
+	local function exec (cmd, cmdp1,cmdp2,cmdp3)
+		local res, data, cde, msg
+		if (cmd == 'list_activities') or (cmd == 'list_devices') or (cmd == 'list_device_commands') or (cmd == 'get_config') then 
+			res, data, cde, msg = Harmony_GetConfig(cmd, cmdp1) 
+		elseif (cmd == 'update_config') then 
+			res, data, cde, msg = Harmony_UpdateConfigurations() 
 		elseif (cmd == 'get_current_activity_id') then 
-			retStat, retVal = Harmony_GetCurrentActivtyID(true, outFormat) 
+			res, data, cde, msg = Harmony_GetCurrentActivtyID() 
+		elseif (cmd == 'power_off') then 
+			res, data, cde, msg = Harmony_PowerOff() 
 		elseif (cmd == 'start_activity') then 
-			retStat, retVal = Harmony_StartActivity(cmdp1, true, outFormat) 
+			res, data, cde, msg = Harmony_StartActivity(cmdp1) 
+		elseif (cmd == 'change_channel') then 
+			res, data, cde, msg = Harmony_ChangeChannel(cmdp1) 
+		elseif (cmd == 'find_activity_by_name') then 
+			res, data = Harmony_FindActivityByName(cmdp1) 
+		elseif (cmd == 'find_activity_by_id') then 
+			res, data = Harmony_FindActivityByID(cmdp1) 
+		elseif (cmd == 'find_device_by_name') then 
+			res, data = Harmony_FindDeviceByName(cmdp1) 
+		elseif (cmd == 'find_device_by_id') then 
+			res, data = Harmony_FindDeviceByID(cmdp1) 
 		elseif (cmd == 'issue_device_command') then 
-			retStat, retVal = Harmony_IssueDeviceCommand(cmdp1, cmdp2, cmdp3, true, outFormat) 
+			res, data, cde, msg = Harmony_IssueDeviceCommand(cmdp1, cmdp2, cmdp3) 
 		else 
-			retStat = false
-			if (outFormat == HData.PL) then 
-				retVal =  'ERROR: Unknown command ' .. cmd .. ' received.'
-			else
-				retVal =  '{ "ERROR": "Unknown command ' .. cmd .. ' received." }'
-			end
+			res = false
+			cde = 501
+			msg =  "Unknown command " .. cmd .. " received."
 		end
-		if (retStat == false) then return (retVal or "failed") end
-		-- Make nice readable format, or keep in JSON
-		if (outFormat == HData.PL) then 
-			retVal = json.encode(retVal, {indent = true, level = 2} ) 
-			retVal = retVal:gsub('{','')
-			retVal = retVal:gsub('}','')
-			retVal = retVal:gsub('\\"','')
-			retVal = retVal:gsub('"','')
-			retVal = retVal:gsub(',\n','\n')
-			retVal = retVal:gsub('%[\n','\n')
-			retVal = retVal:gsub('%]\n','\n')
-			retVal = retVal:gsub(']\n','\n')
-			retVal = retVal:gsub('\n\n','\n')
-			retVal = retVal:gsub(':',' : ')
-			return retVal
-		else 
-			return json.encode(retVal) 
-		end	
-	end
-	local ok, result = pcall (exec,cmd,outFormat,cmdp1,cmdp2)   -- catch any errors
-	SetBusy(false,true)
-	return result
-end
-
--- Internal HTTP request handler, used by user Interface
--- Output if any is always JSON from the Harmony, no formatting on it.
-function HTTP_HarmonyInt (lul_request, lul_parameters, lul_outputformat)
-	if (GetBusy()) then
-		log.Log('Busy processing other request, sleep a second.')
-		return 'Busy processing other request. Please retry in a moment.'
-	end
-	SetBusy(true,true)
-	log.Debug('request is: '..tostring(lul_request))
-	log.Debug('outputformat is: '..tostring(lul_outputformat))
-	local function exec ()
-		local retStat, retVal = false, ""
-		if (lul_outputformat ~= "xml") then
-			if (lul_request == ("hamGetActivities"..HData.DEVICE)) then
-				retStat, retVal = Harmony_GetConfig('list_activities', "", HData.JS) 
-			elseif (lul_request == ("hamGetDevices"..HData.DEVICE)) then
-				retStat, retVal = Harmony_GetConfig('list_devices', "", HData.JS) 
-			elseif (lul_request == ("hamGetDeviceCommands"..HData.DEVICE)) then
-				retStat, retVal = Harmony_GetConfig('list_device_commands_shrt', lul_parameters.HID or "", HData.JS) 
-			end
-			if (retStat == false) then return "" end
-			return json.encode(retVal) 
+		local ret_struct = {}
+		if res then
+			ret_struct.status = "OK"
+			ret_struct.code = 200
+			ret_struct.msg = "OK"
+			ret_struct.data = data
 		else
-			log.Log("unsupported format")
-			return "Unsupported format : " .. lul_outputformat
+			ret_struct.status = "ERROR"
+			ret_struct.code = cde
+			ret_struct.msg = msg
+			ret_struct.data = {}
 		end
+		return json.encode(ret_struct) 
 	end
-	local ok, result = pcall (exec)   -- catch any errors
-	SetBusy(false,true)
+	local ok, result = pcall(exec,cmd,cmdp1,cmdp2,cmdp3)   -- catch any errors
 	return result
 end
 
-----------------------------------------------------------------------------------------
--- JSON configuration functions.
-
--- See if we have D_HarmonyDevice*.* files that no longer map to a child device.
--- Remove them as it will cause issues when child for same device is recreated.
-local function removeObsoleteChildDeviceFiles(childDevs)
-	local chDev = (childDevs or '') .. ','
-	for fname in lfs.dir(HData.f_path) do
-		local dname = string.match(fname, "D_HarmonyDevice"..HData.DEVICE.."_%d+.")
-		if (dname ~= nil) then 
-			local _,dnum = string.match(dname, "(%d+)_(%d+)")
-			if (dnum ~= nil) then
-				-- We have a child device file, see if the number is still in list of child devices
-				dname = string.match(chDev, dnum..',')
-				if (dname == nil) then 
-					log.Log('Removing obsolete child file '..fname,log.LLWarning)
-					os.remove(HData.f_path..fname)
-				else
-					log.Log('Child file '..fname..' still in use.')
-				end	
-			end	
-		end
-	end
-end
-
--- Support functions to build reoccurring JSON elements.
-local function buildJsonLabelControl(text,top,left,width,height,grp,dtop,dleft)
-	local str = '{ "ControlType": "label", '
-	if (grp ~= nil) then str = str .. '"ControlGroup": "'..grp..'", "top": '..dtop..', "left": '..dleft..', ' end
-	str = str .. '"Label": { "text": "'..text..'" }, "Display": { "Top": '..top..', "Left": '..left..', "Width": '..width..', "Height": '..height..' }}'
-	return str
-end
-local function buildJsonVariableControl(text,top,left,width,height,grp,dtop,dleft)
-	local str = '{ "ControlType": "variable", '
-	if (grp ~= nil) then str = str .. '"ControlGroup": "'..grp..'", "top": '..dtop..', "left": '..dleft..', ' end
-	str = str .. '"Display": { "Service": "'..HData.SIDS.MODULE..'", "Variable": "'..text..'", "Top": '..top..', "Left": '..left..', "Width": '..width..', "Height": '..height..' }}'
-	return str
-end
-local function buildJsonLabel(tag,text,top,pos,scr,func)
-	local str = '{ "Label": { "lang_tag": "'..tag..'", "text": "'..text..'" }, '
-	if (luup.version_major >= 7) and (top == true) then str = str .. '"TopNavigationTab": 1, ' end
-	str = str .. '"Position": "'..pos..'", "TabType": "javascript", "ScriptName": "'..scr..'", "Function": "'..func..'" }'
-	return str
-end
-local function buildJsonEvent(id,val,text)		
-	local str ='{ "value": "'..val..'", "HumanFriendlyText": { "lang_tag": "ham_act_id_ch'..id..'", "text": "'..text..'" }}'
-	return str
-end
-local function buildJsonStateIcon(icon,vari,val,sid)		
-	local str
-	local path = ""
-	local remicons = var.GetNumber('RemoteImages')
-	if (remicons == 1) then 
-		path = HData.RemoteIconURL
-	else
-		if (luup.version_major >= 7) then path = HData.UI7IconURL end
-	end
-	if (luup.version_major >= 7) then
-		str ='{ "img": "'..path..icon..'.png", "conditions": [ { "service": "'..sid..'", "variable": "'..vari..'", "operator": "==","value": '..val..' } ]}'
-	else
-		str = '"'..path..icon..'.png"'
-	end
-	return str
-end
-
--- Build the string for a button
--- Input : Button label, button ID, total number of buttons and if this is a Child device
-local function buildJsonButton(btnNum,btnLab,btnID,btnDur,numBtn,isChild)
-	-- Calculate top and left values.
-	-- Need to calculate a pair for the dashboard pannel and device control tab
-	local pTop, pLeft, cTop, cLeft, cWidth, row, col, butWidth, str, newRow
-	str = ''
-	newRow = false
-	if (luup.version_major >= 7) then
-		if (numBtn == 4) then	-- Two rows, two columns
-			pTop, col = math.modf((btnNum-1) / 2)
-			pLeft = col * 2
-			butWidth =  2
-			if (btnNum == 3) then newRow = true end
-		elseif (numBtn <= 5) then	-- One row, up to five columns
-			pLeft = btnNum-1
-			pTop = 0
-			butWidth =  1 + (5-numBtn)/3
-		elseif (numBtn == 6) then	-- Two rows, three columns
-			pTop, col = math.modf((btnNum-1) / 3)
-			pLeft = col * 3
-			butWidth = 1.66
-			if (btnNum == 4) then newRow = true end
-		elseif (numBtn <= 8) then	-- Two rows, four columns
-			pTop, col = math.modf((btnNum-1) / 4)
-			pLeft = col * 4
-			butWidth = 1.33
-			if (btnNum == 5) then newRow = true end
-		elseif (numBtn <= 10) then	-- Two rows, five columns
-			pTop, col = math.modf((btnNum-1) / 5)
-			pLeft = col * 5
-			butWidth = 1
-			if (btnNum == 6) then newRow = true end
-		elseif (numBtn <= 12) then	-- Three rows, four columns
-			pTop, col = math.modf((btnNum-1) / 4)
-			pLeft = col * 4
-			butWidth = 1.33
-			if (btnNum == 5) or (btnNum == 9) then newRow = true end
-		elseif (numBtn <= 15) then	-- Three rows, five columns
-			pTop, col = math.modf((btnNum-1) / 5)
-			pLeft = col * 5
-			butWidth = 1
-			if (btnNum == 6) or (btnNum == 11) then newRow = true end
-		elseif (numBtn <= 16) then	-- Four rows, four columns
-			pTop, col = math.modf((btnNum-1) / 4)
-			pLeft = col * 4
-			butWidth = 1.33
-			if (btnNum == 5) or (btnNum == 9) or (btnNum == 13) then newRow = true end
-		else						-- Four or five rows, five columns
-			pTop, col = math.modf((btnNum-1) / 5)
-			pLeft = col * 5
-			butWidth = 1
-			if (btnNum == 6) or (btnNum == 11) or (btnNum == 16)  or (btnNum == 21) then newRow = true end
-		end
-		cTop = 45 + (pTop * 25)
-		if (newRow) then str = str .. '{ "ControlGroup": 1, "ControlType": "line_break" },\n'	end
-		cWidth = 65 * butWidth
-		cLeft = 50 + (pLeft * (cWidth + 10))
-	else
-		if (numBtn <= 8) then		-- Two columns
-			pTop, col = math.modf((btnNum-1) / 2)
-			pLeft = col * 2
-		elseif (numBtn <= 12) then	-- Three columns
-			pTop, col = math.modf((btnNum-1) / 3)
-			pLeft = col * 3
-		elseif (numBtn <= 16) then	-- Four columns
-			pTop, col = math.modf((btnNum-1) / 4)
-			pLeft = col * 4
-		elseif (numBtn <= 20) then	-- Five columns
-			pTop, col = math.modf((btnNum-1) / 5)
-			pLeft = col * 5
-		else						-- Six columns
-			pTop, col = math.modf((btnNum-1) / 6)
-			pLeft = col * 6
-		end
-		cWidth = 65
-		cTop = 45 + (pTop * 25)
-		cLeft = 50 + (pLeft * (cWidth + 10))
-	end	
-	str = str .. '{ "ControlGroup": "1", "ControlType": "button", "top": '..pTop..', "left": '..pLeft..','
-	if (butWidth ~= 1) and (utils.GetUI() >= utils.IsUI7) then
-		str = str .. '"HorizontalMultiplier": "'..butWidth..'",'
-	end
-	str = str .. '\n"Label": { "text": "'..btnLab..'" },\n'
-	if (isChild == false) then
-		str = str .. '"Display": { "Service": "'..HData.SIDS.MODULE..'", "Variable": "CurrentActivityID", "Value": "'..btnID..'", "Top": '..cTop..', "Left": '..cLeft..', "Width": '..cWidth..', "Height": 20 },\n'
-		str = str .. '"Command": { "Service": "'..HData.SIDS.MODULE..'", "Action": "StartActivity", "Parameters": [{ "Name": "newActivityID", "Value": "'..btnID..'" }] },\n'
-	else
-		if btnDur == '' then btnDur = 0 end
-		str = str .. '"Display": { "Service": "'..HData.SIDS.CHILD..'", "Variable": "LastDeviceCommand", "Value": "'..btnID..'", "Top": '..cTop..', "Left": '..cLeft..', "Width": '..cWidth..', "Height": 20 },\n'
-		str = str .. '"Command": { "Service": "'..HData.SIDS.CHILD..'", "Action": "SendDeviceCommand", "Parameters": [{ "Name": "Command", "Value": "'..btnID..'"},{  "Name": "Duration", "Value": "'..btnDur..'" }] },\n'
-	end
-	str = str .. '"ControlCode": "ham_button'..btnNum..'"\n}'
-	return str
-end
-
--- Build the JSON file 
-local function writeJsonFile(devID,outf,newDevice,isChild,childDev)
-	local maxBtn, id, lab, dur, sid
-	local numBtn = 0
+-- Read the variables for the buttons from main or child device. 
+-- Return array with buttons config found.
+local function Harmony_GetButtonData(devID,sid,isChild)
+	local id, lab, dur = '','',0
+	local maxBtn = HData.MaxButtonUI7
 	local buttons = {}
-	if (utils.GetUI() >= utils.IsUI7) then 
-		maxBtn = HData.MaxButtonUI7 
-	else 
-		maxBtn = HData.MaxButtonUI5 
-	end
-	if (isChild == false) then sid = HData.SIDS.MODULE else sid = HData.SIDS.CHILD end
-	-- If not new device we can read the variables for the buttons. 
+	if (utils.GetUI() < utils.IsUI7) then maxBtn = HData.MaxButtonUI5 end
 	for i = 1, maxBtn do
 		if (isChild == false) then
-			id = var.Get("ActivityID"..i) or ''
-			lab = var.Get("ActivityDesc"..i) or ''
-			dur = 0
+			id = var.Get("ActivityID"..i,sid,devID) or ''
+			lab = var.Get("ActivityDesc"..i,sid,devID) or ''
 		else
-			-- On first create this will be nil
-			if (childDev ~= nil) then
-				id = var.Get("Command"..i,sid,childDev)
-				lab = var.Get("CommandDesc"..i,sid,childDev)
-				dur = var.GetNumber("PrsCommand"..i,sid,childDev)
-			else
-				id = ''
-				lab = ''
-				dur = 0
-			end
+			id = var.Get("Command"..i,sid,devID) or ''
+			lab = var.Get("CommandDesc"..i,sid,devID) or ''
+			dur = var.GetNumber("PrsCommand"..i,sid,devID)
 		end
 		if (id ~= '') and (lab ~= '') then 
-			numBtn = numBtn + 1 
+			local numBtn = #buttons + 1
 			buttons[numBtn] = {}
 			buttons[numBtn].ID = id
 			buttons[numBtn].Label = lab
 			buttons[numBtn].Dur = dur
 		end
 	end	
-	log.Debug('Button definitions found : ' .. numBtn)
-	local path = ""
-	local remicons = var.GetNumber('RemoteImages')
-	if (remicons == 1) then 
-		path = HData.RemoteIconURL
-	else
-		if (luup.version_major >= 7) then 
-			path = HData.UI7IconURL 
-		else
-			path = HData.UI5IconURL 
-		end
-	end
-	-- For main device default icon is wait so it status is more clear during all reloads.
-	if (utils.GetUI() >= utils.IsUI7) then
-		local defIcon
-		if (isChild == false) then defIcon = 'Harmony_75.png' else defIcon = 'Harmony.png' end
-		outf:write('{\n"default_icon": "'..path..defIcon..'",\n')
-	else
-		outf:write('{\n"flashicon": "'..path..'Harmony.png",\n')
-	end
-	outf:write('"state_icons":[ \n')
-	-- Write status Icon control, skip first image as that is plug in default
-	for i = 2, #HData.Images do
-		outf:write(buildJsonStateIcon(HData.Images[i],'IconSet',i-2,sid))
-		if (i < #HData.Images) then 
-			outf:write(', ')
-		else
-			outf:write(' ],\n')
-		end
-	end	
-	if (utils.GetUI() < utils.IsUI7) then outf:write('"DisplayStatus": { "Service": "'..sid..'", "Variable": "IconSet", "MinValue": "0", "MaxValue": "4" },\n') end
-	-- Calculate X size of device on screen
-	local x,y,top,tab
-	if (numBtn > 6) then 
-		x,y = math.modf((numBtn + 3) / 4)
-		outf:write('"x": "'..x..'",\n"y": "4",\n') 
-	else
-		outf:write('"x": "2",\n"y": "4",\n') 
-	end
-	outf:write('"inScene": "1",\n"ToggleButton": 1,\n"Tabs": [ {\n')
-	outf:write('"Label": { "lang_tag": "tabname_control", "text": "Control" },\n')
-	outf:write('"Position": "0",\n"TabType": "flash",\n')
-	if (utils.GetUI() >= utils.IsUI7) then outf:write('"TopNavigationTab": 1,\n') end
-	outf:write('"ControlGroup": [ { "id": "1", "scenegroup": "1", "isSingle": "1" } ],\n')
-	-- Calculate correct SceneGroup size. Size not used in UI7.
-	if (numBtn < 5) then top = 1 else top = 0 end
-	if (numBtn <= 1) then 
-		x = 1 
-		y = 1
-	elseif (numBtn <= 8) then
-		y, x = math.modf((numBtn + 1) / 2)
-		x = 2
-	elseif (numBtn <= 12) then
-		y, x = math.modf((numBtn + 2) / 3)
-		x = 3 
-	else
-		x,y = math.modf((numBtn + 3) / 4)
-		y = 4
-	end
-	outf:write('"SceneGroup": [ { "id": "1", "top": "'..top..'", "left": "0", "x": "'..x..'", "y": "'..y..'"} ],\n')
-	outf:write('"Control": [')
-	if (numBtn > 0) then
-		-- Add the buttons
-		for i = 1, #buttons do
-			log.Debug('Adding button ' .. i .. ', label ' .. (buttons[i].Label or 'missing'))
-			outf:write(buildJsonButton(i,buttons[i].Label, buttons[i].ID, buttons[i].Dur, numBtn, isChild) .. ',\n')
-		end	
-	else
-		if (isChild == false) then
-			outf:write(buildJsonLabelControl('Configure the harmony Activities on the Activities tab to define control buttons.',50,50,300,20,1,0,0) .. ',\n')
-		else
-			outf:write(buildJsonLabelControl('Configure the device Command Buttons on the Settings tab to complete configuration.',50,50,300,20,1,0,0) .. ',\n')
-		end	
-	end
-	-- Add other UI elements
-	tab = 1
-	-- Post UI7 we have a different JS UI file then prior versions.
-	local jsFile, jsPfx
-	if (utils.GetUI() < utils.IsUI7) then 
-		jsFile = 'J_Harmony.js' 
-		jsPfx = 'ham' 
-	else
-		jsFile = 'J_Harmony_UI7.js'
-		jsPfx = 'Harmony.'
-	end
-	if (isChild == false) then
-		top = 160
-		if (numBtn > 6) then top = top + 25 end
-		outf:write(buildJsonLabelControl('Link Status:',top,50,100,20) .. ',\n')
-		outf:write(buildJsonVariableControl('LinkStatus',top,180,150,20) .. ',\n')
-		top = top + 20
-		outf:write(buildJsonLabelControl('Current Activity ID :',top,50,100,20) .. ',\n')
-		outf:write(buildJsonVariableControl('CurrentActivityID',top,180,80,20) .. ',\n')
-		top = top + 20
-		outf:write(buildJsonLabelControl('Last command:',top,50,100,20) .. ',\n')
-		outf:write(buildJsonVariableControl('LastCommand',top,180,80,20) .. ',\n')
-		top = top + 20
-		outf:write(buildJsonLabelControl('Last command time:',top,50,100,20) .. ',\n')
-		outf:write(buildJsonVariableControl('LastCommandTime',top,180,80,20) .. '\n]},\n')
-		outf:write(buildJsonLabel('settings','Settings',true,tab,jsFile,jsPfx..'Settings') ..',\n')
-		tab = tab+1
-		outf:write(buildJsonLabel('activities','Activities',true,tab,jsFile,jsPfx..'Activities') ..',\n')
-		tab = tab+1
-		outf:write(buildJsonLabel('devices','Devices',true,tab,jsFile,jsPfx..'Devices') ..',\n')
-		tab = tab+1
-	else
-		top = 160
-		if (numBtn > 20) then top = top + 25 end
-		outf:write(buildJsonLabelControl('Controlling Hub:',top,50,100,20) .. ',\n')
-		local tmpstr = buildJsonVariableControl('HubName',top,180,80,20)
-		outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
-		top = top + 20
-		outf:write(buildJsonLabelControl('Last command:',top,50,100,20) .. ',\n')
-		local tmpstr = buildJsonVariableControl('LastDeviceCommand',top,180,80,20)
-		outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. '\n]},\n')
-		outf:write(buildJsonLabel('settings','Settings',true,tab,jsFile,jsPfx..'DeviceSettings'),',\n')
-		tab = tab+1
-	end
-	outf:write(buildJsonLabel('advanced','Advanced',false,tab,'shared.js','advanced_device') ..',\n')
-	outf:write(buildJsonLabel('logs','Logs',false,tab+1,'shared.js','device_logs') ..',\n')
-	outf:write(buildJsonLabel('notifications','Notifications',false,tab+2,'shared.js','device_notifications'))
-	if (utils.GetUI() >= utils.IsUI7) then outf:write(',\n' .. buildJsonLabel('ui7_device_scenes','Scenes',false,tab+3,'shared.js','device_scenes')) end
-	outf:write('],\n')
-	outf:write('"eventList2": [ ')
-	-- Add possible events if we have buttons as well.
-	if (numBtn > 0) then
-		outf:write('{ "id": 1, "label": { "lang_tag": "act_id_ch", "text": ')
-		if (isChild == false) then
-			outf:write('"Harmony Activity is changing to"}, "serviceId": "'..sid..'",\n')
-		else	
-			outf:write('"Device Command activated"}, "serviceId": "'..sid..'",\n')
-		end
-		outf:write('"norepeat": "1","argumentList": [{ "id": 1, "dataType": "string", "allowedValueList": [\n')
-		local btnID = 0
-		for i = 1, #buttons do
-			log.Debug('Adding event ' .. i .. ', label ' .. (buttons[i].Label or 'missing'))
-			local lab = buttons[i].Label or 'missing'
-			local val = buttons[i].ID or 'missing'
-			local str = buildJsonEvent(i,val,lab)
-			if (i < #buttons) then str = str .. ',' end
-			str = str .. '\n'
-			outf:write(str)
-		end	
-		if (isChild == false) then
-			outf:write('], "name": "CurrentActivityID", "comparisson": "=", "prefix": { "lang_tag": "select_event", "text": "Select activity : " }, "suffix": {} } ] }')
-		else	
-			outf:write('], "name": "LastDeviceCommand", "comparisson": "=", "prefix": { "lang_tag": "select_command", "text": "Select command : " }, "suffix": {} } ] }')
-		end
-		-- Status event of On/Off
-		if (isChild == false) then
-			outf:write(',\n{ "id": 2, "label": { "lang_tag": "a_device_is_turned_on_off", "text": "A device is turned on or off"}, "serviceId": "'..HData.SIDS.SP..'",')
-			outf:write('"norepeat": "1","argumentList": [{ "id": 1, "dataType": "boolean", "defaultValue": "0", "allowedValueList": [')
-			outf:write('{ "Off": "0", "HumanFriendlyText": { "lang_tag": "hft_device_turned_off", "text": "Whenever the _DEVICE_NAME_ is turned off" }},') 
-			outf:write('{ "On": "1", "HumanFriendlyText": { "lang_tag": "hft_device_turned_on", "text": "Whenever the _DEVICE_NAME_ is turned on" }}')
-			outf:write('], "name": "Status", "comparisson": "=", "prefix": { "lang_tag": "ui7_which_mode", "text": "Which mode : " }, "suffix": {} } ] }')
-		end
-	end	
-	outf:write('],\n')
-	if (isChild == false) then
-		if (utils.GetUI() < utils.IsUI7) then outf:write('"DeviceType": "urn:schemas-rboer-com:device:Harmony'..devID..':1",\n') end
-		outf:write('"device_type": "urn:schemas-rboer-com:device:Harmony'..devID..':1"\n}\n')
-	else	
-		if (utils.GetUI() < utils.IsUI7) then outf:write('"DeviceType": "urn:schemas-rboer-com:device:HarmonyDevice'..HData.DEVICE..'_'..devID..':1",\n') end
-		outf:write('"device_type": "urn:schemas-rboer-com:device:HarmonyDevice'..HData.DEVICE..'_'..devID..':1"\n}\n')
-	end
-	return true
-end
-
--- Create the new Static JSON and compress it unless on openLuup
-local function make_JSON_file(devID,name,newDevice,isChild,childDev,prnt_id)
-	local prnt
-	if (prnt_id ~= nil) then prnt = prnt_id..'_' else prnt = '' end
-	local jsonOut = HData.f_path..name..prnt..devID..'.json'
-	local outf = io.open(jsonOut..'X', 'w')
-	local ret = writeJsonFile(devID,outf,newDevice,isChild,childDev)
-    outf:close()
-	-- Only make new file when write was successful.
-	if (HData.onOpenLuup) then 
-		if (ret == true) then os.execute('cp '..jsonOut..'X '..jsonOut) end
-	else	
-		if (ret == true) then os.execute('pluto-lzo c '..jsonOut..'X '..jsonOut..'.lzo') end
-	end	
-	os.execute('rm -f '..jsonOut..'X')
-end
-
--- Re-write the D_Harmony[Device].xml file to point to device specific Static JSON
-local function make_D_file(devID,name,prnt_id)
-	local prnt
-	local outf
-	if (prnt_id ~= nil) then prnt = prnt_id..'_' else prnt = '' end
-	local inpath = HData.f_path .. 'D_'..name..'.xml'
-	local outpath = HData.f_path .. 'D_'..name..prnt..devID..'.xml'
-	if (HData.onOpenLuup) then 
-		outf = io.open(outpath..'X', 'w' )
-	else	
-		os.execute('pluto-lzo d '..inpath..'.lzo '..inpath)
-		os.execute('rm -f '..outpath..'.lzo')
-		outf = io.open(outpath, 'w' )
-	end
-
-	for l in io.lines(inpath) do
-		l = string.gsub(l, '\r', '' )
-		l = string.gsub(l, ':device:'..name..':', ':device:'..name..prnt..devID..':')
-		l = string.gsub(l, 'D_'..name..'.json', 'D_'..name..prnt..devID..'.json')
-		outf:write(l..'\n')
-	end
-	outf:close()
-	if (HData.onOpenLuup) then
-		os.execute('cp '..outpath..'X '..outpath)
-		os.execute('rm -f '..outpath..'X')
-	else	
-		os.execute('pluto-lzo c '..outpath..' '..outpath..'.lzo')
-		os.execute('rm -f '..outpath)
-		os.execute('rm -f '..inpath)
-	end	
-end
-
--- Create CustomModeConfiguration value for preset House mode support.
-local function Harmony_CreateCustomModeConfiguration(devID, isChild)
-	local maxBtn, id, lab, dur, sid, cmd, prm
-	local retVal = nil
-	local numBtn = 0
-	local buttons = {}
-	if (utils.GetUI() >= utils.IsUI7) then 
-		maxBtn = HData.MaxButtonUI7 
-	else 
-		maxBtn = HData.MaxButtonUI5 
-	end
-	if (isChild == false) then 
-		sid = HData.SIDS.MODULE
-		cmd = "/StartActivity"
-		prm = "/newActivityID="
-	else 
-		sid = HData.SIDS.CHILD 
-		cmd = "/SendDeviceCommand"
-		prm = "/Command="
-	end
-	-- If not new device we can read the variables for the buttons. 
-	for i = 1, maxBtn do
-		if (isChild == false) then
-			id = var.Get("ActivityID"..i) or ''
-			lab = var.Get("ActivityDesc"..i) or ''
-		else
-			id = var.Get("Command"..i,sid,devID) or ''
-			lab = var.Get("CommandDesc"..i,sid,devID) or ''
-		end
-		if (id ~= '') and (lab ~= '') then 
-			numBtn = numBtn + 1 
-			buttons[numBtn] = {}
-			buttons[numBtn].ID = id
-			buttons[numBtn].Label = lab
-		end
-	end	
-	for i = 1, #buttons do
-		local lab = buttons[i].Label or 'missing'
-		local val = buttons[i].ID or 'missing'
-		local str = lab .. ";CMD" .. val .. ";" .. sid .. cmd .. prm .. val
-		if (i < #buttons) then str = str .. '|' end
-		retVal = (retVal or "") .. str
-	end	
-	return retVal
+	log.Debug('Button definitions found : ' .. #buttons)
+	return buttons
 end
 
 -- Update the Static JSON file to update button texts etc
 -- Input: devID = device ID
 function Harmony_UpdateButtons(devID, upgrade)
-	log.Debug('Updating buttons for Harmony device ' .. devID)
-	local upgrd
-	if (upgrade ~= nil) then upgrd = upgrade else upgrd = false end 
+	log.Debug('Updating buttons for Harmony device %s.',devID)
+	local upgrd = false
+	if (upgrade ~= nil) then upgrd = upgrade end 
 	-- See if we have a device specific definition yet
---	local dname = string.match(luup.devices[devID].device_type, ":Harmony%d+:")
 	local dname = string.match(var.GetAttribute("device_type", devID), ":Harmony%d+:")
 	local dnum
 	if (dname ~= nil) then dnum = string.match(dname, "%d+") end
+	local buttons = Harmony_GetButtonData(devID, HData.SIDS.MODULE, false)
+	local remicons = (var.GetNumber('RemoteImages') == 1)
 	if (dnum ~= nil) then 
 		-- If we do this for an upgrade then also do a new D_ file
-		if (upgrd == true) then make_D_file(dnum,'Harmony') end
+		if (upgrd == true) then cnfgFile.CreateDeviceFile(devID,'Harmony') end
 		-- Update existing device specific JSON for buttons
-		make_JSON_file(dnum,'D_Harmony',false,false)
+		cnfgFile.CreateJSONFile(devID,'D_Harmony',false,buttons,remicons)
 	else
 		-- Create new device specific JSON for buttons
-		make_D_file(devID,'Harmony')
-		make_JSON_file(devID,'D_Harmony',false,false)
+		cnfgFile.CreateDeviceFile(devID,'Harmony')
+		cnfgFile.CreateJSONFile(devID,'D_Harmony',false,buttons,remicons)
 		local fname = "D_Harmony"..devID
 		local curname = var.GetAttribute("device_file",devID)
 		if (curname ~= (fname..".xml")) then var.SetAttribute("device_file",fname..".xml",devID) end
@@ -2302,7 +2442,7 @@ function Harmony_UpdateButtons(devID, upgrade)
 	end	
 	-- Set preset house mode options
 	if (utils.GetUI() >= utils.IsUI7) then 
-		local cmc = Harmony_CreateCustomModeConfiguration(devID, false)
+		local cmc = cnfgFile.CreateCustomModeConfiguration(devID, false, buttons)
 		if (cmc) then var.Set("CustomModeConfiguration", cmc, HData.SIDS.HA, devID) end
 	end	
 	
@@ -2318,7 +2458,7 @@ function Harmony_UpdateDeviceButtons(devID, upgrade)
 	if (upgrade ~= nil) then upgrd = upgrade else upgrd = false end 
 	-- See if this gets called with the parent device ID, if so stop now to avoid issues
 	if (devID == HData.DEVICE) then
-		log.Log('UpdateDeviceButtons called with parent ID #' .. devID .. '. Aborting..',log.LLWarning)
+		log.Warning('UpdateDeviceButtons called with parent ID #%s. Aborting..',devID)
 		return false
 	end
 	-- See if this gets called for a child this device owns when not upgrading
@@ -2327,7 +2467,7 @@ function Harmony_UpdateDeviceButtons(devID, upgrade)
 		prnt_id = var.GetAttribute('id_parent', devID) or ""
 		if (prnt_id ~= "") then prnt_id = tonumber(prnt_id) end
 		if (prnt_id ~= HData.DEVICE) then
-			log.Log('UpdateDeviceButtons called for wrong parent ID #' .. prnt_id .. '. Expected #' .. HData.DEVICE .. '. Aborting..',log.LLWarning)
+			log.Warning('UpdateDeviceButtons called for wrong parent ID #%s. Expected #%s. Aborting..',prnt_id,HData.DEVICE)
 			return false
 		end
 	else
@@ -2338,22 +2478,23 @@ function Harmony_UpdateDeviceButtons(devID, upgrade)
 	-- Get Harmony Device ID as that is what we use as key
 	local deviceID = var.Get("DeviceID",HData.SIDS.CHILD,devID)
 	if (deviceID == "") then
-		log.Log('UpdateDeviceButtons called for unconfigured device. Aborting..',log.LLWarning)
+		log.Warning('UpdateDeviceButtons called for unconfigured device. Aborting..')
 		return false
 	end
 	
-	log.Debug('Updating buttons of device# ' .. devID .. ' for Harmony Device ' .. deviceID)
---	local dname = string.match(luup.devices[devID].device_type, ":HarmonyDevice"..prnt_id.."_%d+:")
+	log.Debug('Updating buttons of device# %s for Harmony Device %s.',devID, deviceID)
 	local dname = string.match(var.GetAttribute("device_type", devID), ":HarmonyDevice"..prnt_id.."_%d+:")
 	local dnum, tmp
 	if (dname ~= nil) then tmp, dnum = string.match(dname, "(%d+)_(%d+)") end
+	local buttons = Harmony_GetButtonData(devID, HData.SIDS.CHILD, true)
+	local remicons = (var.GetNumber('RemoteImages') == 1)
 	if (dnum ~= nil) then 
 		-- If we do this for an upgrade then also do a new D_ file
-		if (upgrd == true) then make_D_file(dnum,'HarmonyDevice',prnt_id) end
-		make_JSON_file(dnum,'D_HarmonyDevice',false,true,devID,prnt_id)
+		if (upgrd == true) then cnfgFile.CreateDeviceFile(dnum,'HarmonyDevice',prnt_id) end
+		cnfgFile.CreateJSONFile(dnum,'D_HarmonyDevice',true,buttons,remicons,devID,prnt_id)
 	else
-		make_D_file(deviceID,'HarmonyDevice',prnt_id)
-		make_JSON_file(deviceID,'D_HarmonyDevice',false,true,devID,prnt_id)
+		cnfgFile.CreateDeviceFile(deviceID,'HarmonyDevice',prnt_id)
+		cnfgFile.CreateJSONFile(deviceID,'D_HarmonyDevice',true,buttons,remicons,devID,prnt_id)
 		local fname = "D_HarmonyDevice"..prnt_id.."_"..deviceID
 		local curname = var.GetAttribute("device_file",devID)
 		if (curname ~= (fname..".xml")) then var.SetAttribute("device_file",fname..".xml",devID) end
@@ -2364,7 +2505,7 @@ function Harmony_UpdateDeviceButtons(devID, upgrade)
 	end	
 	-- Set preset house mode options
 	if (utils.GetUI() >= utils.IsUI7) then 
-		local cmc = Harmony_CreateCustomModeConfiguration(devID, true)
+		local cmc = cnfgFile.CreateCustomModeConfiguration(devID, true, buttons)
 		if (cmc) then var.Set("CustomModeConfiguration", cmc, HData.SIDS.HA, devID) end
 	end
 	
@@ -2375,21 +2516,30 @@ end
 	
 -- Harmony_CreateChildren
 local function Harmony_CreateChildren()
-	log.Debug("Harmony_CreateChildren for device ")
+	log.Debug("Harmony_CreateChildren start")
 	local childDeviceIDs = var.Get("PluginHaveChildren")
 	-- See if we have obsolete child xml or json files. If so remove them
-	if (HData.Plugin_Disabled == false) then removeObsoleteChildDeviceFiles(childDeviceIDs) end
+	if (HData.Plugin_Disabled == false) then cnfgFile.RemoveObsoleteDeviceFiles(childDeviceIDs) end
 	if (childDeviceIDs == '') then 
 		-- Note: we must continue this routine when there are no child devices as we may have ones that need to be deleted.
-		log.Log("No child devices to create.")
+		log.Info("No child devices to create.")
 	else
-		log.Debug("Child devices to create : " ..childDeviceIDs)
+		log.Debug("Child devices to create : %s.",childDeviceIDs)
 	end
 	-- Get the list of devices from the harmony when not disabled.
 	local retStat, Devices_t 
 	if (HData.Plugin_Disabled == false) then 
-		retStat, Devices_t = Harmony_GetConfig('list_devices', "", HData.JS)
-		if retStat and (#Devices_t.devices == 0) then log.Log("No devices returned from Harmony Hub.") end
+		-- Force load from config so any new devices get populated with configuration.
+		Harmony_UpdateConfigurations()
+		retStat, Devices_t = Harmony_GetConfig('list_devices')
+		if retStat then
+			if (#Devices_t.devices == 0) then log.Log("No devices returned from Harmony Hub.") end
+		else	
+			Devices_t = {}
+			Devices_t.devices = {}
+			retStat = false
+			log.Warning("Failed to get list of devices from Harmony Hub.")
+		end
 	else
 		Devices_t = {}
 		Devices_t.devices = {}
@@ -2400,8 +2550,8 @@ local function Harmony_CreateChildren()
 		log.Log("Failed to obtain the current devices from Hub. Hub may be off. Will analyse current Child devices")
 		local altidprfx = 'HAM'..HData.DEVICE..'_'
 		for k, v in pairs(luup.devices) do
-			if (v.id ~=var.GetAttribute ('altid')) and (string.sub(v.id,1,altidprfx:len()) == altidprfx) then
-				log.Debug("Found existing child device, lets save! id " .. tostring(v.id))
+			if var.GetAttribute('id_parent', k) == HData.DEVICE then
+				log.Debug("Found existing child device, lets save! id %s.",tostring(v.id))
 				local i = #Devices_t.devices + 1
 				Devices_t.devices[i] = {}
 				Devices_t.devices[i].ID = string.sub(v.id,altidprfx:len()+1)
@@ -2411,6 +2561,7 @@ local function Harmony_CreateChildren()
 	end
 	local childDevices = luup.chdev.start(HData.DEVICE)
 	local embed = (var.GetNumber("PluginEmbedChildren") == 1)
+	local remicons = (var.GetNumber('RemoteImages') == 1)
 	-- Loop over devices to create child for, add extra comma for gmatch to work on last device
 	childDeviceIDs = childDeviceIDs .. ','
 	for deviceID in childDeviceIDs:gmatch("(%w+),") do
@@ -2424,7 +2575,7 @@ local function Harmony_CreateChildren()
 			end	
 		end
 		if (desc == nil) then
-			log.Log("Error! device definitions not found on Harmony Hub for ID "..deviceID,log.LLWarning)
+			log.Warning("Device definitions not found on Harmony Hub for ID %s.",deviceID)
 		else
 			-- See if the device specific files already exist, if not copy from base and adapt
 			local fname = 'D_HarmonyDevice'..HData.DEVICE..'_'..deviceID
@@ -2436,15 +2587,14 @@ local function Harmony_CreateChildren()
 			if f~=nil then
 				-- Found, no actions needed
 				io.close(f)
-				log.Debug('CreateChildren: Device files for '..deviceID..' exist.')
+				log.Debug('CreateChildren: Device files for %s exist.',deviceID)
 			else
 				-- Not yet there, make them
 				log.Debug('CreateChildren: Making new device files.')
-				make_D_file(deviceID,'HarmonyDevice',HData.DEVICE)
-				make_JSON_file(deviceID,'D_HarmonyDevice',false,true,nil,HData.DEVICE)
+				cnfgFile.CreateDeviceFile(deviceID,'HarmonyDevice',HData.DEVICE)
+				cnfgFile.CreateJSONFile(deviceID,'D_HarmonyDevice',true,{},remicons,nil,HData.DEVICE)
 			end
---			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.SIDS.CHILD..",DeviceID=".. deviceID.."\n"..HData.SIDS.CHILD..",HubName="..luup.devices[HData.DEVICE].description
-			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.SIDS.CHILD..",DeviceID=".. deviceID.."\n"..HData.SIDS.CHILD..",HubName="..var.GetAttribute("name")
+			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.SIDS.CHILD..",DeviceID=".. deviceID.."\n"..HData.SIDS.CHILD..",HubName="..var.GetAttribute("name").."\n"..HData.SIDS.CHILD..",DeviceCommands="
 			local name = "HRM: " .. string.gsub(desc, "%s%(.+%)", "")
 			log.Debug("Child device id " .. altid .. " (" .. name .. "), number " .. deviceID)
 			luup.chdev.append(
@@ -2462,22 +2612,129 @@ local function Harmony_CreateChildren()
 	luup.chdev.sync(HData.DEVICE, childDevices)  -- Vera will reload here when there are new devices
 end
 
+-- In the call back we can conclude a new config from the Hub needs to be requested. This cannot be done from the callback.
+-- Schedule it until succesful.
+function Harmony_ScheduleConfigUpdate(configVersion)
+	-- If busy, try again in a second
+log.Debug("Harmony_ScheduleConfigUpdate %s.",configVersion)
+	if (GetBusy()) then 
+		luup.call_delay("Harmony_ScheduleConfigUpdate", 1,configVersion)
+	else	
+		local res, data, cde, msg = Harmony_UpdateConfigurations()
+		if res then
+			var.Set("HubConfigVersion", configVersion)
+		else
+			log.Error("Failed to retrieve new configuration: %d, %s.",cde,msg)
+		end
+	end
+end
+
+-- Call back function for async mesages from the Hub
+function Harmony_Callback(data)
+	log.Debug("Harmony_CallBack start.")
+	local rt = data.type or data.cmd
+	if rt == "harmonyengine.metadata?notify" then
+		-- NOP for now. Is used for example when SONOS is active 
+		local dv = data.data
+		if dv.musicMeta then
+			local album = dv.musicMeta.album
+			local volume = dv.musicMeta.volumeLevel
+			local device = dv.musicMeta.deviceId or ""
+			if album then
+				log.Debug("harmonyengine.metadata?notify; device : %s, album : %s.",device,album)
+			elseif volume then
+				log.Debug("harmonyengine.metadata?notify; device : %s, volumeLevel : %s.",device,volume)
+			end
+		end	
+	elseif rt == "connect.stateDigest?notify"  or rt == "vnd.logitech.connect/vnd.logitech.statedigest?get" then
+		local dv = data.data
+		-- Get details from state Digest
+		--[[ These are known data elements.
+			dv.sleepTimerId
+			dv.runningZoneList
+			dv.sequence
+			dv.activityId
+			dv.errorCode
+			dv.syncStatus
+			dv.time
+			dv.stateVersion
+			dv.tzOffset
+			dv.mode
+			dv.hubSwVersion
+			dv.deviceSetupState
+			dv.tzoffset
+			dv.isSetupComplete
+			dv.discoveryServer
+			dv.configVersion
+			dv.discoveryServerCF
+			dv.runningActivityList
+			dv.activityStatus
+			dv.wifiStatus
+			dv.tz
+			dv.activitySetupState
+			dv.updates
+			dv.hubUpdate
+			dv.contentVersion
+			dv.accountId
+		]]
+		log.Debug("stateDigest %s",json.encode(dv))
+		var.Set("hubSwVersion",dv.hubSwVersion)
+--		if (tonumber(dv.activityId)) then UpdateCurrentActivity(dv.activityId) end
+--		the activityStatus represents the following states: 
+--			0 = Hub is off, 1 = Activity is starting, 2 = Activity is started, 3 = Hub is turning off) 
+		var.Set("activityStatus", dv.activityStatus)
+		if dv.activityStatus == 0 then
+			UpdateCurrentActivity(-1)
+		elseif dv.activityStatus == 1 then
+			var.Set("StartingActivity", dv.activityId)
+		elseif dv.activityStatus == 2 then
+			local actID = dv.activityId
+			if (tonumber(actID)) then
+				log.Debug("connect.stateDigest?notify activity : %s.",actID)
+				UpdateCurrentActivity(actID)
+			end
+		elseif dv.activityStatus == 3 then
+			var.Set("StartingActivity", -1)
+		end
+		-- If activities or devices config have been changed, schedule an update.
+		local curcnf = var.GetNumber("HubConfigVersion")
+		if curcnf ~= dv.configVersion then
+			luup.call_delay("Harmony_ScheduleConfigUpdate", 1, dv.configVersion)
+		end
+	elseif rt == "harmony.engine?startActivity" then
+		local dv = data.data
+		log.Debug("Start activity device %d, step %d of %d.", dv.deviceId, dv.done, dv.total)
+	elseif rt == "harmony.engine?startActivityFinished" then
+		-- An activity has started, update the current activity.
+		local dv = data.data
+		local actID = dv.activityId
+		if (tonumber(actID)) then
+			log.Debug("harmony.engine?startActivityFinished activity : %s.",actID)
+			UpdateCurrentActivity(actID)
+		end
+	else
+		local dv = data.data
+		log.Debug("unknown request type : %s.",(rt or "nil"))
+		log.Debug(json.encode(dv))
+	end
+	log.Debug("Harmony_CallBack end.")
+	return true
+end
+
 -- Finish our setup activities that take a tad too long for system start
 function Harmony_Setup()
-	log.Log("Harmony device #" .. HData.DEVICE .. " is starting up!",log.LLInfo)
+	log.Info("Harmony device #%s is starting up!",HData.DEVICE)
 	--	Start polling for status and HTTP request handler when set-up is successful
 	local srv = var.GetNumber("HTTPServer")
 	log.Debug("HTTPServer " .. srv)	
 	-- Start public handler on request
 	if (srv == 1) then luup.register_handler ("HTTP_Harmony", "Harmony".. HData.DEVICE) end
-	luup.register_handler ("HTTP_HarmonyInt", "hamGetActivities".. HData.DEVICE)
-	luup.register_handler ("HTTP_HarmonyInt", "hamGetDevices".. HData.DEVICE)
-	luup.register_handler ("HTTP_HarmonyInt", "hamGetDeviceCommands".. HData.DEVICE)
+	SetBusy(false, false)
 	-- Generate children, new or removed ones will cause a reload
 	Harmony_CreateChildren()
-	SetBusy(false, false)
-	-- Look for current activity to start off with
-	luup.call_delay("Harmony_PollCurrentActivity", 6, "", false)
+	-- Get the latest status from Hub
+	Harmony_GetStateDigest()
+	
 	-- If debug level, keep tap on memory usage too.
 	checkMemory()
 	setStatusIcon(HData.Icon.IDLE)
@@ -2491,27 +2748,40 @@ function Harmony_init(lul_device)
 	log = logAPI()
 	var = varAPI()
 	utils = utilsAPI()
+	cnfgFile = ConfigFilesAPI()
+	Harmony = HarmonyAPI()
+
 	var.Initialize(HData.SIDS.MODULE, HData.DEVICE)
 	
 	var.Default("LogLevel", log.LLError)
 	log.Initialize(HData.Description, var.GetNumber("LogLevel"))
 	utils.Initialize()
-	ws_client = wsAPI() -- 2.28b
-	
+
 	SetBusy(true,false)
 	setStatusIcon(HData.Icon.WAIT)
-	log.Log("Harmony device #" .. HData.DEVICE .. " is initializing!",log.LLInfo)
+	log.Log("Harmony device #%s is initializing!",HData.DEVICE)
 	-- See if we are running on openLuup.
-	log.Log("We are running on "..utils.GetUI())
 	if (utils.GetUI() == utils.IsOpenLuup) then
+		log.Log("We are running on openLuup.")
 		HData.onOpenLuup = true
-		log.Log("We are running on openLuup!!")
+	else	
+		log.Log("We are running on Vera UI%s.",utils.GetUI())
 	end
+	local locIconURI = HData.UI7IconURL
+	local maxBtn = HData.MaxButtonUI7
+	local isUI7 = true
+	if (utils.GetUI() < utils.IsUI7) then 
+		locIconURI = HData.UI5IconURL 
+		maxBtn = HData.MaxButtonUI5
+		isUI7 = false
+	end
+	
+	cnfgFile.Initialize(HData.f_path, isUI7, HData.onOpenLuup, maxBtn, HData.RemoteIconURL, locIconURI, HData.Images, HData.DEVICE, HData.SIDS.MODULE, HData.SIDS.CHILD)
 	
 	-- See if user disabled plug-in 
 	local disabled = var.GetAttribute("disabled")
 	if (disabled == 1) then
-		log.Log("Init: Plug-in version "..HData.Version.." - DISABLED",log.LLWarning)
+		log.Warning("Init: Plug-in version %s - DISABLED",HData.Version)
 		HData.Plugin_Disabled = true
 		-- Still create any child devices so we do not loose configurations.
 		Harmony_CreateChildren()
@@ -2526,16 +2796,12 @@ function Harmony_init(lul_device)
 	local altid = var.GetAttribute('altid') or ""
 	if (altid == "") then var.SetAttribute('altid', 'HAM'..HData.DEVICE..'_CNTRL') end
 	-- Make sure all (advanced) parameters are there
---	local email = var.Default("Email")
---	local pwd = var.Default("Password")
+	local email = var.Default("Email")
+	local pwd = var.Default("Password")
 	local commTimeOut = tonumber(var.Default("CommTimeOut",5))
 	var.Default("HTTPServer", 0)
-	var.Default("PollInterval",0)
-	var.Default("PollHomeOnly",0)
 	var.Default("OkInterval",3)
-	-- V2.15, option to wait on completion of start activity
-	local wait = (var.Default("WaitOnActivityStartComplete", "1") == "1")
-	var.Default("AuthorizationToken")
+--	var.Default("AuthorizationToken")
 	var.Default("PluginHaveChildren")
 	var.Default("PluginEmbedChildren", "0")
 	var.Default("DefaultActivity")
@@ -2543,15 +2809,25 @@ function Harmony_init(lul_device)
 	var.Default("LinkStatus", "--")
 	var.Default("LastCommand", "--")
 	var.Default("LastCommandTime", "--")
+	var.Default("RemoteID", "--")	
+	var.Default("AccountID", "--")	
+	var.Default("FriendlyName", "--")	
+	var.Default("hubSwVersion")
+	var.Default("HubConfigVersion", "--")	
+	var.Default("householdUserProfileUri")	
+	var.Default("Activities")	
+	var.Default("Devices")	
 	var.Default("CurrentActivityID")
+	var.Default("StartingActivityID")
 	var.Default("Target", "0", HData.SIDS.SP)
 	var.Default("Status", "0", HData.SIDS.SP)
 	var.Default("UIVersion", "--")
+	var.Default("findResult")
 	var.Set("Version", HData.Version)
 	local forcenewjson = false
 	-- Make sure icons are accessible when they should be, even works after factory reset or when single image link gets removed or added.
 	if (HData.onOpenLuup == false) then utils.CheckImages(HData.Images) end
-	-- See if we are upgrading UI settings, if so force rewrite of JSON files.
+	-- See if we are upgrading UI settings, if so force rewrite of JSON files. V2.28
 	local version = var.Get("UIVersion")
 	if (version ~= HData.UIVersion) then forcenewjson = true end
 	-- When the RemoteIcons flag changed, we must force a rewrite of the JSON files as well.
@@ -2567,21 +2843,23 @@ function Harmony_init(lul_device)
 			var.Set("RemoteImagesPrv",0)
 		end	
 	end
+	remicons = (var.GetNumber('RemoteImages') == 1)
 	if (forcenewjson == true) then
 		local ipa = var.GetAttribute("ip")
-		var.Default("HubIPAddress", ipa)
+		local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
+		if ipAddress then var.Default("HubIPAddress", ipa) end
 		-- Bump loglevel to monitor rewrite
-		log.Log("Force rewrite of JSON files for correct Vera software version and configuration.",log.LLWarning)
+		log.Warning("Force rewrite of JSON files for correct Vera software version and configuration.")
 		-- Set the category to switch if needed
 		local catid = var.GetAttribute('category_num') or ""
 		if (catid ~= '3') then var.SetAttribute('category_num', '3') end
 		-- Rewrite JSON files for main device
 		Harmony_UpdateButtons(HData.DEVICE, true)
 		-- Make default JSON for child devices D_HarmonyDevice.json
-		make_JSON_file('','D_HarmonyDevice',false,true)
-		log.Log("Rewritten files for main device # " .. HData.DEVICE)
+		cnfgFile.CreateJSONFile('','D_HarmonyDevice',true,{},remicons)
+		log.Log("Rewritten files for main device # %s.",HData.DEVICE)
 		-- Then for any child devices, as they are not yet set, we must look at altid we use.
-		removeObsoleteChildDeviceFiles()
+		cnfgFile.RemoveObsoleteDeviceFiles()
 		local childDeviceIDs = var.Get("PluginHaveChildren")
 		if (childDeviceIDs ~= "") then
 			for devNo, deviceID in pairs(luup.devices) do
@@ -2594,11 +2872,11 @@ function Harmony_init(lul_device)
 						Harmony_UpdateDeviceButtons(devNo,true)
 						local catid = var.GetAttribute('category_num',devNo) or ""
 						if (catid ~= '3') then var.SetAttribute('category_num', '3',devNo) end
-						log.Log("Rewritten files for child device # " .. devNo .. " name " .. chdevID)
+						log.Log("Rewritten files for child device # %s name %s.",devNo,chdevID)
 						-- Hide the delete button for the child devices
 						var.Default("HideDeleteButton", 1, HData.SIDS.HA, devNo)
 					else
-						log.Log("Child device # " .. devNo .. " does not have a matching DeviceID set.")
+						log.Log("Child device #%s does not have a matching DeviceID set.",devNo)
 					end	
 				else
 					-- See if I have older version type device that is supported by this hub
@@ -2609,7 +2887,7 @@ function Harmony_init(lul_device)
 						local suppchID = string.match(childDeviceIDs, chdevID)
 						if (chdevID == altid) and (chdevID == suppchID) then
 							-- Transfer values from old to new
-							log.Log("Transferring settings for child device # "..devNo..", name "..chdevID.." from Harmony to HarmonyDevice")
+							log.Log("Transferring settings for child device #%s, name %s from Harmony to HarmonyDevice",devNo,chdevID)
 							var.Set("DeviceID", chdevID, HData.SIDS.CHILD, devNo)
 							for idx = 1, 24 do
 								local cmdV = var.Get("Command"..idx, HData.SIDS.MODULE, devNo)
@@ -2638,13 +2916,13 @@ function Harmony_init(lul_device)
 							var.SetAttribute('altid','HAM'..HData.DEVICE..'_'..chdevID,devNo)
 							local catid = var.GetAttribute('category_num',devNo) or ""
 							if (catid ~= '3') then var.SetAttribute('category_num', '3',devNo) end
-							log.Log("Rewritten files for child device # " .. devNo .. " name " .. chdevID)
+							log.Log("Rewritten files for child device #%s name %s.",devNo,chdevID)
 						end
 					end
 				end
 			end
 		else
-			log.Log("No child devices.",log.LLInfo)
+			log.Info("No child devices.")
 		end
 		var.Set("UIVersion", HData.UIVersion)
 		-- Sleep for 5 secs, just in case we have multiple plug in copies that try to migrate. They must all have time to finish.
@@ -2652,11 +2930,11 @@ function Harmony_init(lul_device)
 		-- We must reload for new files to be picked up
 		utils.ReloadLuup()
 	else
-		log.Log("UIVersion is current : " .. version,log.LLInfo)
+		var.Set("UIVersion", HData.UIVersion)
+		log.Info("UIVersion is current : %s.",version)
 	end
 	
 	-- Check that we have to parameters to get started
-	local success = true
 	local ipa =	var.Default("HubIPAddress","")
 	local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
 	-- Some cases IP gets stuck in variable and no in attribute (openLuup or ALTUI bug)
@@ -2666,35 +2944,37 @@ function Harmony_init(lul_device)
 		utils.SetLuupFailure(1, HData.DEVICE)
 		return false, "Configure IP Address.", HData.Description
 	end
-	log.Log("Using Harmony Hub: IP address " .. ipAddress, log.LLInfo)
-	Harmony = HarmonyAPI(ipAddress, wait)
-	if (Harmony == nil) then 
-		success = false 
-	else
-		-- Open connection
-		success = Harmony.Connect()
-		if (not success) then
-			Harmony = nil
-		end
-	end
-	if (Harmony == nil) then 
+	log.Info("Using Harmony Hub: IP address %s.",ipAddress)
+	if not Harmony.Initialize(ipAddress, nil, "HH"..HData.DEVICE.."#rboer", Harmony_Callback) then 
 		setStatusIcon(HData.Icon.ERROR)
 		SetBusy(false,false)
 		utils.SetLuupFailure(2, HData.DEVICE)
-		return false, "Hub connection set-up failed. Check IP Address, email and password.", HData.Description
+		return false, "Hub connection set-up failed. Check IP Address.", HData.Description
+	end	
+	-- Populate details from the Hub V3.0
+	local res, data, cde, msg = Harmony.GetHubDetails()
+	if res then
+		var.Set("RemoteID", data.remote_id)	
+		var.Set("AccountID", data.account_id)	
+		var.Set("FriendlyName", data.friendly_name)	
 	end
-
+	
 	--	Schedule to finish rest of start up in a few seconds
 	luup.call_delay("Harmony_Setup", 3, "", false)
-	log.Debug("Harmony Hub Control: init_module completed ")
+	log.Debug("Harmony Hub Control: init_module completed.")
 	utils.SetLuupFailure(0, HData.DEVICE)
 	return true
 end
 
--- See if we have incoming data, should not happen
+-- See if we have incoming data. Buffer each XML section between <>. Call handler on full section.
+-- Note does not allow for < or > characters in CDATA section at the moment.
 function Harmony_Incoming(lul_data)
+    if (luup.is_ready(lul_device) == false or HData.Plugin_Disabled == true) then
+        return
+    end
+	-- Log data from Harmony to see what we get
 	if (lul_data) then
-		log.Debug("Incoming received : " .. tostring(lul_data))
+--		log.Debug("Incoming received : " .. tostring(lul_data) .. "|"..string.byte(lul_data,1) .. "|")
 	end
 	return true
 end

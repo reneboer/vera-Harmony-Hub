@@ -14,6 +14,24 @@
 	<actionList>
 	<action>
 		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>ForceUpdateConfiguration</name>
+		<job>
+			Harmony_UpdateConfigurations()
+			return 4,nil
+		</job>
+		<jobname>StartActivity</jobname>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>PowerOff</name>
+		<job>
+			Harmony_PowerOff()
+			return 4,nil
+		</job>
+		<jobname>StartActivity</jobname>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 		<name>StartActivity</name>
 		<job>
 			Harmony_StartActivity(lul_settings.newActivityID or "")
@@ -23,31 +41,53 @@
     </action>
 	<action>
 		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>ChangeChannel</name>
+		<job>
+			Harmony_ChangeChannel(lul_settings.newChannel or "")
+			return 4,nil
+		</job>
+		<jobname>StartActivity</jobname>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 		<name>GetCurrentActivityID</name>
 		<run>
-			local status, actID = Harmony_GetCurrentActivtyID()
-			return actID
+			Harmony_GetCurrentActivtyID()
 		</run>
     </action>
 	<action>
 		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>SetPollInterval</name>
+		<name>SetHubPolling</name>
 		<run>
-			-- Do no accept poll interval below 10 seconds to avoid hub overload
-			local newInt = tonumber(lul_settings.newPollInterval or "0")
-			if ((newInt ~= 0) and (newInt &lt; 10)) then newInt = 10 end
-			var.Set("PollInterval", newInt)
-			-- When not zero start polling now
-			if (newInt ~= 0) then 
-				luup.call_delay("Harmony_PollCurrentActivity", newInt, "", false)
-			end	
+			Harmony_SetHubPolling(lul_settings.newPollFlag or "0")
 		</run>
     </action>
 	<action>
 		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>GetPollInterval</name>
+		<name>FindActivityByName</name>
 		<run>
-			return var.Get("PollInterval")
+			Harmony_FindActivityByName(lul_settings.ActivityName or "")
+		</run>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>FindActivityByID</name>
+		<run>
+			Harmony_FindActivityByID(lul_settings.ActivityID or "0")
+		</run>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>FindDeviceByName</name>
+		<run>
+			Harmony_FindDeviceByName(lul_settings.DeviceName or "")
+		</run>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>FindDeviceByID</name>
+		<run>
+			Harmony_FindDeviceyByID(lul_settings.DeviceID or "0")
 		</run>
     </action>
 	<action>
@@ -72,8 +112,10 @@
         <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
 		<name>SetTarget</name>
 		<job>
+log.Debug("1..")		
 			local newTarget = lul_settings.newTargetValue or ""
-			local curTarget = var.Get("Target", HData.SWSID)
+			local curTarget = var.Get("Target", HData.SIDS.SP)
+log.Debug("SetTarget new %s cur %s",newTarget,curTarget)	
 			if (newTarget ~= curTarget) then
 				if (newTarget == '1') then 
 					local newActivityID = var.Get('DefaultActivity') 
@@ -81,28 +123,12 @@
 						Harmony_StartActivity(newActivityID)
 					end	
 				else 
-					Harmony_StartActivity('-1')
+					Harmony_PowerOff()
 				end
 			end
 			return 4,nil
 		</job>
 		<jobname>SetTarget</jobname>
-    </action>
-	<action>
-        <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
-		<name>GetTarget</name>
-		<run>
-			local val = var.Get("Target", HData.SWSID)
-			return val
-		</run>
-    </action>
-	<action>
-        <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
-		<name>GetStatus</name>
-		<run>
-			local val = var.Get("Status", HData.SWSID)
-			return val
-		</run>
     </action>
 	<action>
 		<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
