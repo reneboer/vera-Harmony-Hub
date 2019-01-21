@@ -1419,7 +1419,7 @@ local function ConfigFilesAPI()
 			cTop = 45 + (pTop * 25)
 			cLeft = 50 + (pLeft * (cWidth + 10))
 		end	
-		str = str .. format('{ "ControlGroup": "1", "ControlType": "button", "top": %d, "left": %d,',pTop,pLeft)
+		str = str .. format('{ "ControlGroup": "1", "ControlType": "button", "top": %s, "left": %s,',pTop,pLeft)
 		if (butWidth ~= 1) and (IsUI7) then
 			str = str .. format('"HorizontalMultiplier": "%s",',butWidth)
 		end
