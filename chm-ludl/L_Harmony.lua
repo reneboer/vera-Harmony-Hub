@@ -3,8 +3,10 @@
 	
 	Written by R.Boer. 
 	V3.0 16 January 2019
-				to-do, add Phillips HUE support (V3.1), add media player (Sonos) functions (V3.2).
+				to-do, add Phillips HUE support (V3.x), add media player (Sonos) functions (V3.x).
 	
+	V3.1 Changes:
+				Rounding the json positioning calculations.
 	V3.0 Changes:
 				Allow activity names instead of activity ID to start activities. Add CurrentActivity variable to reflect.
 				Allow device names instead of device ID to send commands to a device.
@@ -144,8 +146,8 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.0",
-	UIVersion = "3.0",
+	Version = "3.1",
+	UIVersion = "3.1",
 	DEVICE = "",
 	Description = "Harmony Control",
 	SIDS = {
@@ -428,9 +430,15 @@ local _OpenLuup = 99
 		end	
 	end
 	
+	-- Round up or down to whole number.
+	function _round(n)
+		return math.floor((math.floor(n*2) + 1)/2)
+	end
+	
 	return {
 		Initialize = _init,
 		ReloadLuup = _luup_reload,
+		Round = _round,
 		CheckImages = _check_images,
 		GetMemoryUsed = _getmemoryused,
 		SetLuupFailure = _setluupfailure,
@@ -566,10 +574,8 @@ local function wsAPI()
 		end
 		local chunk,err = sock:receive(2)
 		if err == 'timeout' then
-print("ws_receive timeout header",tostring(chunk))
 			return nil, nil, true, 1000, err
 		elseif err then
-print(format("ws_receive error %s header",err),tostring(chunk))
 			return clean(false,1006,err)
 		end
 		local opcode,pllen = chunk:byte(1,2)
@@ -787,7 +793,7 @@ local function HarmonyAPI()
 			maxcnt = maxcnt -1
 			local response, op, was_clean, code, reason = ws_client.receive()
 			if response then
-log.Debug("ws_client.receive response: "..(response:sub(1,100) or ""))
+--log.Debug("ws_client.receive response: "..(response:sub(1,100) or ""))
 				last_command_ts = os.time()
 				local data, _, errMsg = json.decode(response)
 				if data then
@@ -827,7 +833,7 @@ log.Debug("ws_client.receive response: "..(response:sub(1,100) or ""))
 		local payload = format('{"hbus":{"cmd":"%s","id":"%s#%s","params":%s}}',command,message_prefix,msid,params)
 		local res, stat, err, msg = ws_client.send(payload) 
 		if res then
-log.Debug("send_request, sent payload %s",payload)
+--log.Debug("send_request, sent payload %s",payload)
 			if wait_for_response ~= false then return wait_response(msid) end
 			last_command_ts = os.time()
 			return true
@@ -1394,10 +1400,12 @@ local function ConfigFilesAPI()
 				butWidth = 1
 				if (btnNum == 6) or (btnNum == 11) or (btnNum == 16)  or (btnNum == 21) then newRow = true end
 			end
-			cTop = 45 + (pTop * 25)
+			pTop = utils.Round(pTop)
+			pLeft = utils.Round(pLeft)
+			cTop = utils.Round(45 + (pTop * 25))
 			if (newRow) then str = str .. '{ "ControlGroup": 1, "ControlType": "line_break" },\n'	end
-			cWidth = 65 * butWidth
-			cLeft = 50 + (pLeft * (cWidth + 10))
+			cWidth = utils.Round(65 * butWidth)
+			cLeft = utils.Round(50 + (pLeft * (cWidth + 10)))
 		else
 			if (numBtn <= 8) then		-- Two columns
 				pTop, col = math.modf((btnNum-1) / 2)
@@ -1415,21 +1423,23 @@ local function ConfigFilesAPI()
 				pTop, col = math.modf((btnNum-1) / 6)
 				pLeft = col * 6
 			end
+			pTop = utils.Round(pTop)
+			pLeft = utils.Round(pLeft)
 			cWidth = 65
-			cTop = 45 + (pTop * 25)
-			cLeft = 50 + (pLeft * (cWidth + 10))
+			cTop = utils.Round(45 + (pTop * 25))
+			cLeft = utils.Round(50 + (pLeft * (cWidth + 10)))
 		end	
-		str = str .. format('{ "ControlGroup": "1", "ControlType": "button", "top": %s, "left": %s,',pTop,pLeft)
+		str = str .. format('{ "ControlGroup": "1", "ControlType": "button", "top": %d, "left": %d,',pTop,pLeft)
 		if (butWidth ~= 1) and (IsUI7) then
 			str = str .. format('"HorizontalMultiplier": "%s",',butWidth)
 		end
 		str = str .. format('\n"Label": { "text": "%s" },\n',btnLab)
 		if (isChild == false) then
-			str = str .. format('"Display": { "Service": "%s", "Variable": "CurrentActivityID", "Value": "%s", "Top": %s, "Left": %s, "Width": %s, "Height": 20 },\n',Sid,btnID,cTop,cLeft,cWidth)
+			str = str .. format('"Display": { "Service": "%s", "Variable": "CurrentActivityID", "Value": "%s", "Top": %d, "Left": %d, "Width": %d, "Height": 20 },\n',Sid,btnID,cTop,cLeft,cWidth)
 			str = str .. format('"Command": { "Service": "%s", "Action": "StartActivity", "Parameters": [{ "Name": "newActivityID", "Value": "%s" }] },\n',Sid,btnID)
 		else
 			if btnDur == '' then btnDur = 0 end
-			str = str .. format('"Display": { "Service": "%s", "Variable": "LastDeviceCommand", "Value": "%s", "Top": %s, "Left": %s, "Width": %s, "Height": 20 },\n',ChSid,btnID,cTop,cLeft,cWidth)
+			str = str .. format('"Display": { "Service": "%s", "Variable": "LastDeviceCommand", "Value": "%s", "Top": %d, "Left": %d, "Width": %d, "Height": 20 },\n',ChSid,btnID,cTop,cLeft,cWidth)
 			str = str .. format('"Command": { "Service": "%s", "Action": "SendDeviceCommand", "Parameters": [{ "Name": "Command", "Value": "%s"},{ "Name": "Duration", "Value": "%s" }] },\n',ChSid,btnID,btnDur)
 		end
 		str = str .. format('"ControlCode": "ham_button%s"\n}',btnNum)
@@ -1466,7 +1476,7 @@ local function ConfigFilesAPI()
 		local x,y,top,tab
 		if (numBtn > 6) then 
 			x,y = math.modf((numBtn + 3) / 4)
-			outf:write(format('"x": "%s",\n"y": "4",\n',x)) 
+			outf:write(format('"x": "%d",\n"y": "4",\n',utils.Round(x))) 
 		else
 			outf:write('"x": "2",\n"y": "4",\n') 
 		end
@@ -1490,7 +1500,7 @@ local function ConfigFilesAPI()
 			x,y = math.modf((numBtn + 3) / 4)
 			y = 4
 		end
-		outf:write(format('"SceneGroup": [ { "id": "1", "top": "%s", "left": "0", "x": "%s", "y": "%s"} ],\n',top,x,y))
+		outf:write(format('"SceneGroup": [ { "id": "1", "top": "%d", "left": "0", "x": "%d", "y": "%d"} ],\n',top,utils.Round(x),utils.Round(y)))
 		outf:write('"Control": [')
 		if (numBtn > 0) then
 			-- Add the buttons
