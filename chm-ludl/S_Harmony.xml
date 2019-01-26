@@ -18,6 +18,10 @@
       <name>StartingActivityID</name>
       <dataType>i4</dataType>
     </stateVariable>
+	<stateVariable sendEvents="yes">
+      <name>StartingActivityStep</name>
+      <dataType>string</dataType>
+    </stateVariable>
 	<stateVariable sendEvents="no">
       <name>LastCommand</name>
       <dataType>string</dataType>

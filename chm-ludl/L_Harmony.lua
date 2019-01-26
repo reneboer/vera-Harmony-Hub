@@ -2,9 +2,12 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V3.0 16 January 2019
+	V3.2 26 January 2019
 				to-do, add Phillips HUE support (V3.x), add media player (Sonos) functions (V3.x).
 	
+	V3.2 Changes:
+				Added StartingActivityStep variable to indicate progress of starting activity. Will hold three numbers: d,n,m. When d is the device, n is the current step and m the total number of steps.
+				Setting child device Album and Volume variables as reported by Hub. Used by Sonos devices.
 	V3.1 Changes:
 				Rounding the json positioning calculations.
 	V3.0 Changes:
@@ -146,7 +149,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.1",
+	Version = "3.2",
 	UIVersion = "3.1",
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -956,8 +959,8 @@ local function HarmonyAPI()
 				local res1, data1, cde1, msg1 = send_request("harmony.activityengine?runactivity", format('{"async": "true","timestamp": 10000 ,"args":{"rule":"start"},"activityId":"%s"}',aid))
 				if res1 then 
 					-- For start activity we wait until we get confirmation it got stated
---					if wait ~= false then 
-					if false then -- disable wait, let call back handle it
+--[[				
+					if wait ~= false then 
 						local maxcnt = numberOfMessages
 						local done = false
 						while (not done) and (maxcnt > 1) do
@@ -991,10 +994,11 @@ local function HarmonyAPI()
 							msg = "Failed to get activity start confirmation after max retries."
 						end	
 					else	
+--]]					
 						-- Not waiting on reply
 						res = true
 						data = aid
-					end
+--					end
 				else
 					res = nil
 					data = nil
@@ -2639,6 +2643,18 @@ log.Debug("Harmony_ScheduleConfigUpdate %s.",configVersion)
 	end
 end
 
+-- Find the Child device ID for the Harmony DeviceID
+local function Harmony_FindDevice(deviceID)
+	for k, v in pairs(luup.devices) do
+		if var.GetAttribute('id_parent', k) == HData.DEVICE then
+			log.Debug("Found existing child device, lets save! id %s.",tostring(v.id))
+			local dev = var.GetNumber("DeviceID",HData.SIDS.CHILD,k)
+			if dev == deviceID then return k end
+		end
+	end
+	return nil
+end
+
 -- Call back function for async mesages from the Hub
 function Harmony_Callback(data)
 	log.Debug("Harmony_CallBack start.")
@@ -2649,11 +2665,15 @@ function Harmony_Callback(data)
 		if dv.musicMeta then
 			local album = dv.musicMeta.album
 			local volume = dv.musicMeta.volumeLevel
-			local device = dv.musicMeta.deviceId or ""
-			if album then
+			local device = tonumber(dv.musicMeta.deviceId or "0")
+			if album and device ~= 0 then
 				log.Debug("harmonyengine.metadata?notify; device : %s, album : %s.",device,album)
-			elseif volume then
+				local ch_dev = Harmony_FindDevice(device)
+				if ch_dev then var.Set("Album", album, HData.SIDS.CHILD, ch_dev) end
+			elseif volume and device ~= 0 then
 				log.Debug("harmonyengine.metadata?notify; device : %s, volumeLevel : %s.",device,volume)
+				local ch_dev = Harmony_FindDevice(device)
+				if ch_dev then var.Set("Volume", volume, HData.SIDS.CHILD, ch_dev) end
 			end
 		end	
 	elseif rt == "connect.stateDigest?notify"  or rt == "vnd.logitech.connect/vnd.logitech.statedigest?get" then
@@ -2713,7 +2733,10 @@ function Harmony_Callback(data)
 		end
 	elseif rt == "harmony.engine?startActivity" then
 		local dv = data.data
-		log.Debug("Start activity device %d, step %d of %d.", dv.deviceId, dv.done, dv.total)
+		log.Debug("Start activity device %s, step %d of %d.", dv.deviceId, dv.done, dv.total)
+		var.Set("StartingActivityStep", string.format("%s,%d,%d",dv.deviceId, dv.done, dv.total))
+--		var.Set("StartingActivityStep", dv.deviceId..","..dv.done..","..dv.total)
+log.Debug(var.Get("StartingActivityStep"))		
 	elseif rt == "harmony.engine?startActivityFinished" then
 		-- An activity has started, update the current activity.
 		local dv = data.data
@@ -2723,6 +2746,9 @@ function Harmony_Callback(data)
 			UpdateCurrentActivity(actID)
 		end
 	else
+		-- reqests we may want to look at
+		-- vnd.logitech.harmony/vnd.logitech.harmony.engine?holdAction
+		--
 		local dv = data.data
 		log.Debug("unknown request type : %s.",(rt or "nil"))
 		log.Debug(json.encode(dv))
@@ -2833,6 +2859,8 @@ function Harmony_init(lul_device)
 	var.Default("Status", "0", HData.SIDS.SP)
 	var.Default("UIVersion", "--")
 	var.Default("findResult")
+	var.Default("StartingActivityStep", "-1,0,0")
+	
 	var.Set("Version", HData.Version)
 	local forcenewjson = false
 	-- Make sure icons are accessible when they should be, even works after factory reset or when single image link gets removed or added.
