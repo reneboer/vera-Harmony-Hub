@@ -109,28 +109,6 @@
 		<jobname>IssueDeviceCommand</jobname>
 	</action>
 	<action>
-        <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
-		<name>SetTarget</name>
-		<job>
-log.Debug("1..")		
-			local newTarget = lul_settings.newTargetValue or ""
-			local curTarget = var.Get("Target", HData.SIDS.SP)
-log.Debug("SetTarget new %s cur %s",newTarget,curTarget)	
-			if (newTarget ~= curTarget) then
-				if (newTarget == '1') then 
-					local newActivityID = var.Get('DefaultActivity') 
-					if (newActivityID ~= '') then 
-						Harmony_StartActivity(newActivityID)
-					end	
-				else 
-					Harmony_PowerOff()
-				end
-			end
-			return 4,nil
-		</job>
-		<jobname>SetTarget</jobname>
-    </action>
-	<action>
 		<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
 		<name>UpdateDeviceButtons</name>
 		<job>
@@ -147,6 +125,59 @@ log.Debug("SetTarget new %s cur %s",newTarget,curTarget)
 			return 4,nil
 			</job>
 		<jobname>SendDeviceCommand</jobname>
+	</action>
+	<action>
+        <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
+		<name>SetTarget</name>
+		<job>
+			local newTarget = lul_settings.newTargetValue or ""
+			-- See if we are on parent, or Lamp child
+			if lul_device == HData.DEVICE then
+				local curTarget = var.Get("Target", HData.SIDS.SP)
+				if (newTarget ~= curTarget) then
+					if (newTarget == '1') then 
+						local newActivityID = var.Get('DefaultActivity') 
+						if (newActivityID ~= '') then 
+							Harmony_StartActivity(newActivityID)
+						end	
+					else 
+						Harmony_PowerOff()
+					end
+				end
+			else
+				-- It is a child device. Must be a lamp
+				Harmony_LampSetTarget(lul_device,newTarget)
+			end	
+			return 4,nil
+		</job>
+		<jobname>SetTarget</jobname>
+	</action>
+	<action>
+		<serviceId>urn:upnp-org:serviceId:Dimming1</serviceId>
+		<name>SetLoadLevelTarget</name>
+		<job>
+			Harmony_LampSetLoadLevelTarget(lul_device,lul_settings.newLoadlevelTarget)
+			return 4,nil
+		</job>
+		<jobname>SetLoadLevelTarget</jobname>
+	</action>
+	<action>
+		<serviceId>urn:micasaverde-com:serviceId:Color1</serviceId>
+		<name>SetColorRGB</name>
+		<job>
+			Harmony_LampSetColorRGB(lul_device,lul_settings.newColorRGBTarget)
+			return 4,nil
+		</job>
+		<jobname>SetColorRGB</jobname>
+	</action>
+	<action>
+		<serviceId>urn:micasaverde-com:serviceId:Color1</serviceId>
+		<name>SetColor</name>
+		<job>
+			Harmony_LampSetColor(lul_device,lul_settings.newColorTarget)
+			return 4,nil
+		</job>
+		<jobname>SetColor</jobname>
 	</action>
   </actionList>
 </implementation>

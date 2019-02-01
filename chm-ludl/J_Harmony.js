@@ -1,7 +1,10 @@
 //# sourceURL=J_Harmony.js
 // harmony Hub Control UI json for UI5/UI6
 // Written by R.Boer. 
-// V3.0 20 January 2019
+// V3.3 2 February 2019
+//
+// V3.3 Changes:
+//		Added support for automation devices. For now Lamps only.
 //
 // V3.0 Changes:
 //		Changed to WebSockets API, no longer need for uid,pwd and polling settings.
@@ -133,30 +136,36 @@ function hamDevices(deviceID) {
 	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
 		html += '<tr><td>Plugin is disabled in Attributes.</td></tr>';
 	} else {	
-		var devjs = hamVarGet(deviceID,'Devices');
-		if (devjs != '') {
-			var devs = JSON.parse(devjs).devices;
-			var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
-			var childMsg = [];
+		var devList = [];
+		var lampList = [];
+		var devJs = varGet(deviceID,'Devices');
+		var lampJs = varGet(deviceID,'Lamps');
+		var devHtml = 'Devices not loaded. Check Hub configuration and click the Update Configuration button.';
+		var lampHtml = '';
+		if (devJs != '') {
+			var devs = JSON.parse(devJs).devices;
 			for (var i=0; i<devs.length; i++) {
-				childMsg.push({ 'value':devs[i].ID,'label':devs[i].Device });
+				devList.push({ 'value':devs[i].ID,'label':devs[i].Device });
 			}
-			html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
-				'<tr><td width=200><b>Device selection</b></td><td></td></tr>'+
-				hamhtmlAddButton(deviceID,'UpdateDeviceSelections',2)+
-				'<tr><td colspan="2">'+
-				'<div id="ham_msg">Select device(s) you want to be able to control and click Save Changes.<br>'+
-				'For each selected a child device will be created.<br>'+
-				'A reload command may be performed automatically.</div>'+
-				'</td></tr>'+
-				hamhtmlAddPulldownMultiple(deviceID, 'Devices to Control', 'PluginHaveChildren', childMsg)+
-				hamhtmlAddPulldown(deviceID, 'Create child devices embedded', 'PluginEmbedChildren', yesNo)+
-				'</tbody></table>';
-		} else {
-			html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
-				'<tr><td>&nbsp;</td></tr>'+
-				'<tr><td>Devices not loaded. Click the Update Configuration button.</td></tr></table>';
-		}		
+			devHtml = hamhtmlAddPulldownMultiple(deviceID, 'Devices to Control', 'PluginHaveChildren', devList)+'<p>';
+		}
+		if (lampJs != '') {
+			var devs = JSON.parse(lampJs).lamps;
+			for (var i=0; i<devs.length; i++) {
+				lampList.push({ 'value':devs[i].udn,'label':devs[i].name });
+			}
+			lampHtml = '<p>'+hamhtmlAddPulldownMultiple(deviceID, 'Lamps to Control', 'PluginHaveLamps', lampList)+'<p>';
+		}
+		html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
+			'<tr><td width=200><b>Device selection</b></td><td></td></tr>'+
+			hamhtmlAddButton(deviceID,'UpdateDeviceSelections',2)+
+			'<tr><td colspan="2">'+
+			'<div id="ham_msg">Select device(s) you want to be able to control and click Save Changes.<br>'+
+			'For each selected a child device will be created.<br>'+
+			'A reload command may be performed automatically.</div>'+
+			'</td></tr>'+devHtml+lampHtml+
+			hamhtmlAddPulldown(deviceID, 'Create child devices embedded', 'PluginEmbedChildren', yesNo)+
+			'</tbody></table>';
 	}	
 	html += '<tr><td>&nbsp;</td></tr></tbody></table>';
     set_panel_html(html);
@@ -340,25 +349,6 @@ function hamhtmlGetPulldownSelection(di, vr) {
 function hamhtmlSetMessage(msg) {
 	document.getElementById ("ham_msg").innerHTML = msg;
 }
-function hamhtmlSetLoadMessage(deviceID,typ,msg,disabled) {
-	var deviceObj = get_device_obj(deviceID);
-	var html = '<div id="hamID_content_'+typ+'_'+deviceID+'">'+
-		'<table width="100%" border="0"><tbody>'+
-		'<tr><td class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
-		'<tr><td>&nbsp;</td></tr>'+
-		'<tr><td>'+msg+'</td></tr>'+
-		'<tr><td>&nbsp;</td></tr>';
-	if (disabled !== true) {	
-		html += '<tr><td align="center">'+hamhtmlCreateIMG({src:"skins/default/images/status/ajax-loader.gif",
-					onerror:"if(this.src.indexOf(\"skins/default/icons/ajax-loader.gif\")>0) this.src=\"skins/default/images/status/ajax-loader.gif\";"+
-					"else this.src=\"skins/default/icons/ajax-loader.gif\"" })+'</td></tr>'+
-		'<tr><td align="center">Please wait...</td></tr>';
-	}	
-	html += '</tbody></table>'+
-		'</div>';
-    set_panel_html(html);
-}
-function hamhtmlCreateIMG(a){var b="<img ";for(var prop in a){b+=prop+"='"+a[prop]+"' "}return b+" />"}
 
 // Add a label and pulldown selection
 function hamhtmlAddPulldown(di, lb, vr, values, onchange) {
