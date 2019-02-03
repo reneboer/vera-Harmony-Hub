@@ -1,8 +1,10 @@
 //# sourceURL=J_Harmony.js
 // harmony Hub Control UI json for UI5/UI6
 // Written by R.Boer. 
-// V3.0 20 January 2019
+// V3.1 3 February 2019
 //
+// V3.1 Changes:
+//		Fix for hamDeviceSettings
 // V3.0 Changes:
 //		Changed to WebSockets API, no longer need for uid,pwd and polling settings.
 //		Activities, Devices and Commands are now in variable, no need for HTTP handler.
