@@ -177,8 +177,10 @@ function hamDeviceSettings(deviceID) {
 		if (cmdjs != '') {
 			var funcs = JSON.parse(cmdjs).Functions;
 			var actSel = [{ 'value':'','label':'None'}];
-			for (var i=0; i<funcs.length; i++) {
-				actSel.push({ 'value':funcs[i].Action,'label':funcs[i].Label});
+			for (var j=0; j<funcs[i].Commands.length; j++) {
+				actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
+//			for (var i=0; i<funcs.length; i++) {
+//				actSel.push({ 'value':funcs[i].Action,'label':funcs[i].Label});
 			}
 			html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
 				'<tr><td colspan="4" class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
