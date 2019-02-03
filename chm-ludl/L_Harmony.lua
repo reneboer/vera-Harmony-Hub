@@ -192,7 +192,11 @@ local HData = { -- Data used by Harmony Plugin
 		ERROR = '4'		-- Red
 	},
 	Images = { 'Harmony', 'Harmony_0', 'Harmony_25', 'Harmony_50', 'Harmony_75', 'Harmony_100'	},
-	HueWatts = {["LLC011"] = 8, ["LLC010"] = 10} -- Wattage for known models, so we can report approx. energy usage.
+	HueWatts = {["LLC011"] = 8, 
+				["LLC010"] = 10, 
+				["LCT007"] = 7,
+				["LWB006"] = 9
+				} -- Wattage for known models, so we can report approx. energy usage. Used to default UserSuppliedWattage.
 }
 
 local TaskData = {
@@ -2499,9 +2503,9 @@ local function Harmony_UpdateLampStatus(chdev, data)
 			var.Set("Target", tar, HData.SIDS.SP, chdev)
 			var.Set("Status", tar, HData.SIDS.SP, chdev)
 			if dv.brightness == nil then
-				local model = var.Get("model", HData.SIDS.CHILD, chdev)
-				if HData.HueWatts[model] then
-					var.Set("Watts", HData.HueWatts[model] * tar, HData.SIDS.EM, chdev)
+				local usw = var.GetNumber("UserSuppliedWattage", HData.SIDS.EM, chdev)
+				if usw > 0 then
+					var.Set("Watts", usw * tar, HData.SIDS.EM, chdev)
 				end
 			end
 		end	
@@ -2522,20 +2526,18 @@ local function Harmony_UpdateLampStatus(chdev, data)
 		if dv.brightness then
 			local bri = math.floor(100*dv.brightness/255)
 			var.Set("LoadLevelLast", bri, HData.SIDS.DIM, chdev)
-			local model = var.Get("model",HData.SIDS.CHILD, chdev)
 			if dv.on then
 				var.Set("LoadLevelTarget", bri, HData.SIDS.DIM, chdev)
 				var.Set("LoadLevelStatus", bri, HData.SIDS.DIM, chdev)
-				if HData.HueWatts[model] then
-					var.Set("Watts", (HData.HueWatts[model] * bri) / 100, HData.SIDS.EM, chdev)
+				local usw = var.GetNumber("UserSuppliedWattage", HData.SIDS.EM, chdev)
+				if usw > 0 then
+					var.Set("Watts", (usw * bri) / 100, HData.SIDS.EM, chdev)
 				end
 			else
 				-- When off load levels turn to zero.
 				var.Set("LoadLevelTarget", 0, HData.SIDS.DIM, chdev)
 				var.Set("LoadLevelStatus", 0, HData.SIDS.DIM, chdev)
-				if HData.HueWatts[model] then
-					var.Set("Watts", 0, HData.SIDS.EM, chdev)
-				end
+				var.Set("Watts", 0, HData.SIDS.EM, chdev)
 			end
 		end	
 	else
@@ -2605,9 +2607,6 @@ function Harmony_LampSetTarget(chdev,newTarget)
 		var.Set("Status", newTarget, HData.SIDS.SP, chdev)
 		res, data, cde, msg = Harmony_LampSetState(chdev,string.format('{"on": %s}',(newTarget > 0) and "true" or "false"))
 		local model = var.Get("model",HData.SIDS.CHILD, chdev)
---		if HData.HueWatts[model] then
---			var.Set("Watts", HData.HueWatts[model] * newTarget, HData.SIDS.EM, chdev)
---		end
 	else
 		-- See if we have a last target, if not, go to 100%
 		local newLoadLevelTarget = var.GetNumber("LoadLevelLast", HData.SIDS.DIM, chdev)
@@ -2642,13 +2641,9 @@ function Harmony_LampSetLoadLevelTarget(chdev,newLoadLevelTarget,chainedCall)
 	if (status ~= newLoadLevelTarget) then
 		if not chainedCall then	SetBusy(true, true) end
 		local bri = math.floor(255*newLoadLevelTarget/100)
---		local model = var.Get("model",HData.SIDS.CHILD, chdev)
 		if (bri==0)  then
 --			res, data, cde, msg = Harmony_LampSetState(chdev,'{"on":false,"brightness":0}}')
 			res, data, cde, msg = Harmony_LampSetState(chdev,'{"on":false}')
---			if HData.HueWatts[model] then
---				var.Set("Watts", 0, HData.SIDS.EM, chdev)
---			end
 		else
 			local val = (newLoadLevelTarget ~= 0) 
 			var.Set("LoadLevelLast", newLoadLevelTarget, HData.SIDS.DIM, chdev)
@@ -2657,9 +2652,6 @@ function Harmony_LampSetLoadLevelTarget(chdev,newLoadLevelTarget,chainedCall)
 			var.Set("Target", val and "1" or "0", HData.SIDS.SP, chdev)
 			var.Set("Status", val and "1" or "0", HData.SIDS.SP, chdev)
 			res, data, cde, msg = Harmony_LampSetState(chdev,string.format('{"on":%s,"brightness":%d}',tostring(val),bri))
---			if HData.HueWatts[model] then
---				var.Set("Watts", (HData.HueWatts[model] * newLoadLevelTarget)/100, HData.SIDS.EM, chdev)
---			end
 		end
 		if res then
 			SetLastCommand("SetLoadLevelTarget")
@@ -3135,11 +3127,10 @@ local function Harmony_SyncLamps(childDevices)
 				HData.SIDS.SP..",Target=0"
 			}
 			-- See is we know wattage. Must create own logic to set Watts when turned on.
-			if HData.HueWatts[lamp.model] then
-				vartable[#vartable+1] = HData.SIDS.EM..",ActualUsage=1"
-				vartable[#vartable+1] = HData.SIDS.EM..",Watts=0"
-				vartable[#vartable+1] = HData.SIDS.EM..",UserSuppliedWattage="..HData.HueWatts[lamp.model]
-			end
+			vartable[#vartable+1] = HData.SIDS.EM..",ActualUsage=1"
+			vartable[#vartable+1] = HData.SIDS.EM..",Watts=0"
+			local usw = HData.HueWatts[lamp.model] or 0
+			vartable[#vartable+1] = HData.SIDS.EM..",UserSuppliedWattage="..usw
 
 			-- See if lamp is a binary or dimming light
 			local fname = "D_BinaryLight1"
