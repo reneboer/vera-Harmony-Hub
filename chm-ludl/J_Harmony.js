@@ -9,6 +9,8 @@
 // V3.1 Changes:
 //		Fix for hamDeviceSettings
 //
+// V3.1 Changes:
+//		Fix for hamDeviceSettings
 // V3.0 Changes:
 //		Changed to WebSockets API, no longer need for uid,pwd and polling settings.
 //		Activities, Devices and Commands are now in variable, no need for HTTP handler.
@@ -192,7 +194,7 @@ function hamDeviceSettings(deviceID) {
 			for (var j=0; j<funcs[i].Commands.length; j++) {
 				actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
 			}	
-			html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
+      html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
 				'<tr><td colspan="4" class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
 				'<tr><td colspan="4"><div><b>Device Command mappings</b></div></td></tr>'+
 				hamhtmlAddButton(deviceID,'UpdateDeviceButtons',4)+
