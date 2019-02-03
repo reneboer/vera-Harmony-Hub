@@ -950,7 +950,7 @@ local function HarmonyAPI()
 			maxcnt = maxcnt -1
 			local response, op, was_clean, code, reason = ws_client.receive()
 			if response then
-log.Debug("ws_client.receive response: "..(response:sub(1,1000) or ""))
+--log.Debug("ws_client.receive response: "..(response:sub(1,1000) or ""))
 				last_command_ts = os.time()
 				local data, _, errMsg = json.decode(response)
 				if data then
@@ -968,7 +968,7 @@ log.Debug("ws_client.receive response: "..(response:sub(1,1000) or ""))
 					return nil, nil, 500, "Failed to decode hub response"
 				end
 			else
-log.Debug("ws_client.receive error %s, %d, %s ",tostring(was_clean),code,reason)
+				log.Debug("ws_client.receive error %s, %d, %s ",tostring(was_clean),code,reason)
 				maxcnt = 0
 			end	
 		end
@@ -991,7 +991,7 @@ log.Debug("ws_client.receive error %s, %d, %s ",tostring(was_clean),code,reason)
 		local payload = format('{"hbus":{"cmd":"%s","id":"%s#%s","params":%s}}',command,message_prefix,msid,params)
 		local res, stat, err, msg = ws_client.send(payload) 
 		if res then
-log.Debug("send_request, sent payload %s",payload)
+--log.Debug("send_request, sent payload %s",payload)
 			if wait_for_response ~= false then return wait_response(msid) end
 			last_command_ts = os.time()
 			return true
