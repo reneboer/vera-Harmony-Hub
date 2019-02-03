@@ -1,7 +1,10 @@
 //# sourceURL=J_Harmony_UI7.js
 // harmony Hub Control UI for UI7
 // Written by R.Boer. 
-// V3.0 20 January 2019
+// V3.3 2 February 2019
+//
+// V3.3 Changes:
+//		Added support for automation devices. For now Lamps only.
 //
 // V3.0 Changes:
 //		Changed to WebSockets API, no longer need for uid,pwd and polling settings.
@@ -175,8 +178,6 @@ var Harmony = (function (api) {
 	function _Devices() {
 		_init();
         try {
-			var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
-			var childMsg = [];
 			var deviceID = api.getCpanelDeviceId();
 			var deviceObj = api.getDeviceObject(deviceID);
 			var html = '<div class="deviceCpanelSettingsPage">'+
@@ -187,27 +188,38 @@ var Harmony = (function (api) {
 					'<tr><td>&nbsp;</td></tr>'+
 					'<tr><td>Plugin is disabled in Attributes.</td></tr></table>';
 			} else {	
-				var devjs = varGet(deviceID,'Devices');
-				if (devjs != '') {
-					var devs = JSON.parse(devjs).devices;
+				var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
+				var devList = [];
+				var lampList = [];
+				var devJs = varGet(deviceID,'Devices');
+				var lampJs = varGet(deviceID,'Lamps');
+				var devHtml = 'Devices not loaded. Check Hub configuration and click the Update Configuration button.';
+				var lampHtml = '';
+				if (devJs != '') {
+					var devs = JSON.parse(devJs).devices;
 					for (var i=0; i<devs.length; i++) {
-						childMsg.push({ 'value':devs[i].ID,'label':devs[i].Device });
+						devList.push({ 'value':devs[i].ID,'label':devs[i].Device });
 					}
-					html += '<b>Device selection</b>'+
-						'<p>'+
-						'<div id="ham_msg">Select device(s) you want to be able to control and click Save Changes.<br>'+
-						'For each selected a child device will be created.<br>'+
-						'A reload command may be performed automatically.</div>'+
-						'<p>'+
-						htmlAddPulldownMultiple(deviceID, 'Devices to Control', 'PluginHaveChildren', childMsg)+
-						htmlAddPulldown(deviceID, 'Create child devices embedded', 'PluginEmbedChildren', yesNo)+
-						htmlAddButton(deviceID,'UpdateDeviceSelections');
-				} else {
-					html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
-						'<tr><td>&nbsp;</td></tr>'+
-						'<tr><td>Devices not loaded. Click the Update Configuration button.</td></tr></table>';
-				}	
-				html += '</div></div>';
+					devHtml = htmlAddPulldownMultiple(deviceID, 'Devices to Control', 'PluginHaveChildren', devList)+'<p>';
+				}
+				if (lampJs != '') {
+					var devs = JSON.parse(lampJs).lamps;
+					for (var i=0; i<devs.length; i++) {
+						lampList.push({ 'value':devs[i].udn,'label':devs[i].name });
+					}
+					lampHtml = '<p>'+htmlAddPulldownMultiple(deviceID, 'Lamps to Control', 'PluginHaveLamps', lampList)+'<p>';
+				}
+				html += '<b>Device selection</b>'+
+					'<p>'+
+					'<div id="ham_msg">Select device(s) and/or Lamp(s) you want to be able to control and click Save Changes.<br>'+
+					'For each selected a child device will be created.<br>'+
+					'A reload command may be performed automatically.</div>'+
+					'<p>'+
+					devHtml+lampHtml+
+					'<p>'+
+					htmlAddPulldown(deviceID, 'Create child devices embedded', 'PluginEmbedChildren', yesNo)+
+					htmlAddButton(deviceID,'UpdateDeviceSelections')+
+					'</div></div>';
 			}
 			api.setCpanelContent(html);			
         } catch (e) {
@@ -425,7 +437,7 @@ var Harmony = (function (api) {
 			}, 3000);	
 		} else {
 			showBusy(false);
-			htmlSetMessage("You have not changed any values.<br>No changes to the buttons made.",true);
+			htmlSetMessage("You have not made any changes.<br>No changes to the buttons made.",true);
 		}	
 	}
 	
@@ -439,21 +451,29 @@ var Harmony = (function (api) {
 			varSet(deviceID,'PluginHaveChildren', selIDs);
 			bChanged=true;
 		}	
+		selIDs = htmlGetPulldownSelection(deviceID,'PluginHaveLamps');
+		orgIDs = varGet(deviceID,'PluginHaveLamps');
+		if (selIDs != orgIDs) {
+			varSet(deviceID,'PluginHaveLamps', selIDs);
+			bChanged=true;
+		}	
 		selIDs = htmlGetElemVal(deviceID, 'PluginEmbedChildren');
 		orgIDs = varGet(deviceID, 'PluginEmbedChildren');
 		if (selIDs != orgIDs) {
 			varSet(deviceID,'PluginEmbedChildren', selIDs);
+			bChanged=true;
 		}	
 		// If we have changes in child devices, reload device.
 		if (bChanged) {
 			application.sendCommandSaveUserData(true);
 			setTimeout(function() {
 				doReload(deviceID);
-				htmlSetMessage("Changes to child devices made.<br>Now wait for reload to complete and then refresh your browser page!",false);
+				htmlSetMessage("Changes to configuration made.<br>Now wait for reload to complete and then refresh your browser page!",false);
 				showBusy(false);
 			}, 3000);	
 		} else {
-			htmlSetMessage("You have not selected any other devices.<br>No changes made.",true);
+			showBusy(false);
+			htmlSetMessage("You have not made any changes.<br>No changes made.",true);
 		}
 	}
 	
