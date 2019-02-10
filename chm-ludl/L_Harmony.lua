@@ -2,13 +2,17 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V3.3 3 February 2019
+	V3.4 9 February 2019
 				to-do, add media player (Sonos) functions (V3.x).
 	
+	V3.4 Changes:
+				Setting catagory_num and subcategory_num for Lights. 
+				Setting lamp model and manufacturer in attribute rather than variable.
+				Fix for StartingActivityID.
 	V3.3 Changes:
 				Added support for automation devices. For now Lamps only.
 				Changed call back handling to allow of internal processing.
-				Hardend logAPI.
+				Hardened logAPI.
 	V3.2 Changes:
 				Added StartingActivityStep variable to indicate progress of starting activity. Will hold three numbers: d,n,m. When d is the device, n is the current step and m the total number of steps.
 				Setting child device Album and Volume variables as reported by Hub. Used by Sonos devices.
@@ -153,7 +157,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.3",
+	Version = "3.4",
 	UIVersion = "3.1",
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -284,7 +288,10 @@ local function varAPI()
 
 	-- Set an attribute
 	local function _setattr(name, value, device)
-		luup.attr_set(name, value, tonumber(device or def_dev))
+		local val = _getattr(name, device)
+		if val ~= value then 
+			luup.attr_set(name, value, tonumber(device or def_dev))
+		end	
 	end
 	
 	return {
@@ -2603,8 +2610,11 @@ function Harmony_LampSetTarget(chdev,newTarget)
 	local res, data, cde, msg
 	if (luup.devices[chdev].device_type == "urn:schemas-upnp-org:device:BinaryLight:1") then
 		if newTarget ~= 0 then newTarget = 1 end
-		var.Set("Target", newTarget, HData.SIDS.SP, chdev)
-		var.Set("Status", newTarget, HData.SIDS.SP, chdev)
+		if not Harmony.GetHubPolling() then
+			-- If polling is active, the callback handler wil do this
+			var.Set("Target", newTarget, HData.SIDS.SP, chdev)
+			var.Set("Status", newTarget, HData.SIDS.SP, chdev)
+		end	
 		res, data, cde, msg = Harmony_LampSetState(chdev,string.format('{"on": %s}',(newTarget > 0) and "true" or "false"))
 		local model = var.Get("model",HData.SIDS.CHILD, chdev)
 	else
@@ -2646,11 +2656,14 @@ function Harmony_LampSetLoadLevelTarget(chdev,newLoadLevelTarget,chainedCall)
 			res, data, cde, msg = Harmony_LampSetState(chdev,'{"on":false}')
 		else
 			local val = (newLoadLevelTarget ~= 0) 
-			var.Set("LoadLevelLast", newLoadLevelTarget, HData.SIDS.DIM, chdev)
-			var.Set("LoadLevelTarget", newLoadLevelTarget, HData.SIDS.DIM, chdev)
-			var.Set("LoadLevelStatus", newLoadLevelTarget, HData.SIDS.DIM, chdev)
-			var.Set("Target", val and "1" or "0", HData.SIDS.SP, chdev)
-			var.Set("Status", val and "1" or "0", HData.SIDS.SP, chdev)
+			if not Harmony.GetHubPolling() then
+				-- If polling is active, the callback handler wil do this
+				var.Set("LoadLevelLast", newLoadLevelTarget, HData.SIDS.DIM, chdev)
+				var.Set("LoadLevelTarget", newLoadLevelTarget, HData.SIDS.DIM, chdev)
+				var.Set("LoadLevelStatus", newLoadLevelTarget, HData.SIDS.DIM, chdev)
+				var.Set("Target", val and "1" or "0", HData.SIDS.SP, chdev)
+				var.Set("Status", val and "1" or "0", HData.SIDS.SP, chdev)
+			end	
 			res, data, cde, msg = Harmony_LampSetState(chdev,string.format('{"on":%s,"brightness":%d}',tostring(val),bri))
 		end
 		if res then
@@ -2927,11 +2940,13 @@ function Harmony_UpdateButtons(devID, upgrade)
 		cnfgFile.CreateDeviceFile(devID,'Harmony')
 		cnfgFile.CreateJSONFile(devID,'D_Harmony',false,buttons,remicons)
 		local fname = "D_Harmony"..devID
-		local curname = var.GetAttribute("device_file",devID)
-		if (curname ~= (fname..".xml")) then var.SetAttribute("device_file",fname..".xml",devID) end
+--		local curname = var.GetAttribute("device_file",devID)
+--		if (curname ~= (fname..".xml")) then var.SetAttribute("device_file",fname..".xml",devID) end
+		var.SetAttribute("device_file",fname..".xml",devID)
 		if (utils.GetUI() >= utils.IsUI7) then
-			curname = var.GetAttribute("device_json",devID)
-			if (curname ~= (fname..".json")) then var.SetAttribute("device_json", fname..".json",devID) end
+--			curname = var.GetAttribute("device_json",devID)
+--			if (curname ~= (fname..".json")) then var.SetAttribute("device_json", fname..".json",devID) end
+			var.SetAttribute("device_json", fname..".json",devID)
 		end
 	end	
 	-- Set preset house mode options
@@ -2990,11 +3005,13 @@ function Harmony_UpdateDeviceButtons(devID, upgrade)
 		cnfgFile.CreateDeviceFile(deviceID,'HarmonyDevice',prnt_id)
 		cnfgFile.CreateJSONFile(deviceID,'D_HarmonyDevice',true,buttons,remicons,devID,prnt_id)
 		local fname = "D_HarmonyDevice"..prnt_id.."_"..deviceID
-		local curname = var.GetAttribute("device_file",devID)
-		if curname ~= (fname..".xml") then var.SetAttribute("device_file",fname..".xml",devID) end
+--		local curname = var.GetAttribute("device_file",devID)
+--		if curname ~= (fname..".xml") then var.SetAttribute("device_file",fname..".xml",devID) end
+		var.SetAttribute("device_file",fname..".xml",devID)
 		if utils.GetUI() >= utils.IsUI7 then
-			curname = var.GetAttribute("device_json",devID)
-			if curname ~= (fname..".json") then var.SetAttribute("device_json", fname..".json",devID) end
+--			curname = var.GetAttribute("device_json",devID)
+--			if curname ~= (fname..".json") then var.SetAttribute("device_json", fname..".json",devID) end
+			var.SetAttribute("device_json", fname..".json",devID)
 		end
 	end	
 	-- Set preset house mode options
@@ -3120,8 +3137,6 @@ local function Harmony_SyncLamps(childDevices)
 				HData.SIDS.HA..",HideDeleteButton=1",
 				HData.SIDS.CHILD..",UDN="..udn,
 				HData.SIDS.CHILD..",name="..lamp.name,
-				HData.SIDS.CHILD..",model="..lamp.model,
-				HData.SIDS.CHILD..",manufacturer="..lamp.manufacturer,
 				HData.SIDS.CHILD..",capabilities="..json.encode(lamp.capabilities),
 				HData.SIDS.SP..",Status=0",
 				HData.SIDS.SP..",Target=0"
@@ -3135,8 +3150,7 @@ local function Harmony_SyncLamps(childDevices)
 			-- See if lamp is a binary or dimming light
 			local fname = "D_BinaryLight1"
 			local dtype="urn:schemas-upnp-org:device:BinaryLight:1"
-			local isDimming = lamp.capabilities.dimLevel or lamp.capabilities.temp
-			if isDimming then
+			if lamp.capabilities.dimLevel or lamp.capabilities.temp then
 				vartable[#vartable+1] = HData.SIDS.DIM..",LoadLevelStatus=0"
 				vartable[#vartable+1] = HData.SIDS.DIM..",LoadLevelTarget=0"
 				vartable[#vartable+1] = HData.SIDS.DIM..",LoadLevelLast=0"
@@ -3144,8 +3158,7 @@ local function Harmony_SyncLamps(childDevices)
 				dtype="urn:schemas-upnp-org:device:DimmableLight:1"
 			end
 			-- See if lamp is a monochrome or Color light
-			local isColor = lamp.capabilities.xy or lamp.capabilities.hueSat
-			if isColor then
+			if lamp.capabilities.xy or lamp.capabilities.hueSat then
 				vartable[#vartable+1] = HData.SIDS.COL..",CurrentColor='0=0,1=0,2=0,3=0,4=0'"
 				fname = "D_DimmableRGBLight1"
 				dtype="urn:schemas-upnp-org:device:DimmableRGBLight:1"
@@ -3195,6 +3208,34 @@ local function Harmony_CreateChildren()
 	else
 		log.Log("No devices configuration known. Existing devices may not get initialized.")
 	end
+	
+	-- Configure Lamp devices
+	local childLampUdns = var.Get("PluginHaveLamps")
+	local lampConfigs = var.Get("Lamps")
+	if childLampUdns ~= "" and lampConfigs ~= "" then 
+		-- Get the list of configured lamps.
+		childLampUdns = childLampUdns .. ','
+		local Devices_t = json.decode(lampConfigs)
+		for udn in childLampUdns:gmatch("([^,]*),") do
+			local lamp = nil
+			-- Find matching Lamp definition
+			for i = 1, #Devices_t.lamps do 
+				if Devices_t.lamps[i].udn == udn then
+					lamp = Devices_t.lamps[i]
+					break
+				end	
+			end
+			local chdev = Harmony_FindLamp(udn)
+			if chdev and lamp then
+				-- Set attributes
+				var.SetAttribute("model",lamp.model,chdev)
+				var.SetAttribute("manufacturer",lamp.manufacturer,chdev)
+				var.SetAttribute("category_num",2,chdev) -- Light
+				var.SetAttribute("subcategory_num",(lamp.capabilities.xy or lamp.capabilities.hueSat) and 4 or 1,chdev) -- RGB or Bulb
+			end
+		end	
+	end
+
 	-- Get status of configured lamps.
 	Harmony_LampGetStates()
 end
@@ -3284,7 +3325,7 @@ local function Harmony_CB_StateDigestNotify(cmd,data)
 		if dv.activityStatus == 0 then
 			UpdateCurrentActivity(-1)
 		elseif dv.activityStatus == 1 then
-			var.Set("StartingActivity", dv.activityId)
+			var.Set("StartingActivityID", dv.activityId)
 		elseif dv.activityStatus == 2 then
 			local actID = dv.activityId
 			if (tonumber(actID)) then
@@ -3292,7 +3333,7 @@ local function Harmony_CB_StateDigestNotify(cmd,data)
 				UpdateCurrentActivity(actID)
 			end
 		elseif dv.activityStatus == 3 then
-			var.Set("StartingActivity", -1)
+			var.Set("StartingActivityID", -1)
 		end
 		-- If activities or devices config have been changed, schedule an update.
 		local curcnf = var.GetNumber("HubConfigVersion")
@@ -3337,7 +3378,7 @@ local function Harmony_CB_AutomationStateNotify(cmd,data)
 			local chdev = Harmony_FindLamp(udn)
 			if chdev then
 				log.Debug("automation.state?notify: device %s, udn %s.",chdev,udn)
-log.Debug(json.encode(dt))				
+--log.Debug(json.encode(dt))				
 				Harmony_UpdateLampStatus(chdev,dt)
 			else
 				log.Log("AutomationStateNotify; Unconfigured automation device %s.",udn)
@@ -3430,8 +3471,9 @@ function Harmony_init(lul_device)
 	end
 
 	-- Set Alt ID on first run, may avoid issues
-	local altid = var.GetAttribute('altid') or ""
-	if (altid == "") then var.SetAttribute('altid', 'HAM'..HData.DEVICE..'_CNTRL') end
+--	local altid = var.GetAttribute('altid') or ""
+--	if (altid == "") then var.SetAttribute('altid', 'HAM'..HData.DEVICE..'_CNTRL') end
+	var.SetAttribute('altid', 'HAM'..HData.DEVICE..'_CNTRL')
 	-- Make sure all (advanced) parameters are there
 	local email = var.Default("Email")
 	local pwd = var.Default("Password")
@@ -3455,6 +3497,7 @@ function Harmony_init(lul_device)
 	var.Default("Activities")	
 	var.Default("Devices")	
 	var.Default("Lamps")	
+	var.Default("PluginHaveLamps")
 	var.Default("CurrentActivityID")
 	var.Default("StartingActivityID")
 	var.Default("Target", "0", HData.SIDS.SP)
@@ -3491,8 +3534,9 @@ function Harmony_init(lul_device)
 		-- Bump loglevel to monitor rewrite
 		log.Warning("Force rewrite of JSON files for correct Vera software version and configuration.")
 		-- Set the category to switch if needed
-		local catid = var.GetAttribute('category_num') or ""
-		if (catid ~= '3') then var.SetAttribute('category_num', '3') end
+--		local catid = var.GetAttribute('category_num') or ""
+--		if (catid ~= '3') then var.SetAttribute('category_num', '3') end
+		var.SetAttribute('category_num', 3)
 		-- Rewrite JSON files for main device
 		Harmony_UpdateButtons(HData.DEVICE, true)
 		-- Make default JSON for child devices D_HarmonyDevice.json
@@ -3510,8 +3554,9 @@ function Harmony_init(lul_device)
 					tmp, altid = string.match(altid, "(%d+)_(%d+)")
 					if (chdevID == altid) then
 						Harmony_UpdateDeviceButtons(devNo,true)
-						local catid = var.GetAttribute('category_num',devNo) or ""
-						if (catid ~= '3') then var.SetAttribute('category_num', '3',devNo) end
+--						local catid = var.GetAttribute('category_num',devNo) or ""
+--						if (catid ~= '3') then var.SetAttribute('category_num', '3',devNo) end
+						var.SetAttribute('category_num', 3,devNo)
 						log.Log("Rewritten files for child device # %s name %s.",devNo,chdevID)
 						-- Hide the delete button for the child devices
 						var.Default("HideDeleteButton", 1, HData.SIDS.HA, devNo)
@@ -3554,8 +3599,9 @@ function Harmony_init(lul_device)
 							local chd_type = var.GetAttribute('device_type',devNo)
 							var.SetAttribute('device_type',chd_type:gsub('_'..chdevID,HData.DEVICE..'_'..chdevID),devNo)
 							var.SetAttribute('altid','HAM'..HData.DEVICE..'_'..chdevID,devNo)
-							local catid = var.GetAttribute('category_num',devNo) or ""
-							if (catid ~= '3') then var.SetAttribute('category_num', '3',devNo) end
+--							local catid = var.GetAttribute('category_num',devNo) or ""
+--							if (catid ~= '3') then var.SetAttribute('category_num', '3',devNo) end
+							var.SetAttribute('category_num', 3,devNo)
 							log.Log("Rewritten files for child device #%s name %s.",devNo,chdevID)
 						end
 					end
