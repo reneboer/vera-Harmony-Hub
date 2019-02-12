@@ -47,6 +47,16 @@
 				}
 			]
 		},
+		{ "Label": { 
+				"lang_tag": "settings", 
+				"text": "Settings" 
+			}, 
+			"TopNavigationTab": 1, 
+			"Position": "1", 
+			"TabType": "javascript", 
+			"ScriptName": "J_Harmony.js", 
+			"Function": "Harmony.DeviceSettings" 
+		},
 		{
 			"Label": {
 				"lang_tag": "advanced",

@@ -1,20 +1,30 @@
 //# sourceURL=J_Harmony.js
-// harmony Hub Control UI json for UI5/UI6
+// harmony Hub Control UI
 // Written by R.Boer. 
-// V3.3 3 February 2019
+// V3.5 12 February 2019
+//
+// V3.5 Changes:
+// 		Removed the HTTP Server as option.
+//		Removed remote images option for openLuup as ALTUI handles images properly.
+//		Default js is now for UI7 and openLuup.
 //
 // V3.3 Changes:
 //		Added support for automation devices. For now Lamps only.
-//
-// V3.1 Changes:
-//		Fix for hamDeviceSettings
 //
 // V3.0 Changes:
 //		Changed to WebSockets API, no longer need for uid,pwd and polling settings.
 //		Activities, Devices and Commands are now in variable, no need for HTTP handler.
 //
+// V2.22 Changes:
+//		Fix for ALTUI on saving settings.
+//
+// V2.21 Changes:
+//		Suspend Poll when away has added option to only stop when CurrentActivityID is -1 (all off).
+//
 // V2.20 Changes:
-//		Removed syslog support
+//		Support for Home poll only option.
+//  	Removed syslog support
+//		Nicer look on ALTUI
 //
 // V2.19 Changes:
 //		IP Address is now stored in normal variable, no longer in device IP attribute.
@@ -27,15 +37,20 @@
 //
 // V2.13-1 Changes:
 //		The password input now has the HTML input type password so it won't show.
+// 		Some hints on poll frequency settings.
 //
 // V2.7 Changes:
 //		User can disable plugin. Signal status on control panel.
+//		No more reference to myInterface, using correct api.ui calls instead.
 //
 // V2.5 Changes:
 //		Can define key-press duration for devices.
-//		Layout improvements for native UI and ALTUI.
+//		Some JQuery use. Layout improvements for native UI and ALTUI.
 // 		Changed poll and acknowledge settings to drop down selections.
 //		Proper JSON returns from LUA.
+//
+// V2.4 Changes:
+//		Some optimizations in Vera api calls that now work on UI7
 //
 // V2.1 Changes:
 //		Added selection for time out.
@@ -49,420 +64,644 @@
 //		When not specifying a Description, the activity or command will be defaulted.
 // V2.01 Changes:
 //		getInfo query adds device ID for multiple hub support.
+// V2.0 Changes:
+//		Save of variables via luup action as standard save function does not work reliably remote
 // V1.9 changes:
 // 		Corrected serviceId for UpdateDeviceButtons action.
 //		Added syslog support
+var Harmony = (function (api) {
 
-// Constants. Keep in sync with LUA code.
-var HAM_SID = 'urn:rboer-com:serviceId:Harmony1';
-var HAM_CHSID = 'urn:rboer-com:serviceId:HarmonyDevice1';
-var HAM_MAXBUTTONS = 24;
-var HAM_ERR_MSG = "Error : ";
+	// Constants. Keep in sync with LUA code.
+    var _uuid = '12021512-0000-a0a0-b0b0-c0c030303031';
+	var HAM_SID = 'urn:rboer-com:serviceId:Harmony1';
+	var HAM_CHSID = 'urn:rboer-com:serviceId:HarmonyDevice1';
+	var VB_SID = 'urn:akbooer-com:serviceId:VeraBridge1';
+	var HAM_MAXBUTTONS = 25;
+	var HAM_ERR_MSG = "Error : ";
+	var bOnALTUI = false;
+	var bControllerIsVera = true;
 
-// Return HTML for settings tab
-function hamSettings(deviceID) {
-	var deviceObj = get_device_obj(deviceID);
-	var devicePos = get_device_index(deviceID);
-	var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
-	var timeAck = [{'value':'0','label':'None'},{'value':'1','label':'1 Sec'},{'value':'2','label':'2 Sec'},{'value':'3','label':'3 Sec'}];
-	var logLevel = [{'value':'1','label':'Error'},{'value':'2','label':'Warning'},{'value':'8','label':'Info'},{'value':'11','label':'Debug'}];
-	var actSel = [{ 'value':'','label':'None'}];
-	for (i=1; i<=HAM_MAXBUTTONS; i++) {
-		var actID = hamVarGet(deviceID,'ActivityID'+i);
-		var actDesc = hamVarGet(deviceID,'ActivityDesc'+i);
-		if (actID !== '' && actDesc !== '') {
-			actSel.push({'value':actID,'label':actDesc});
+	// Forward declaration.
+    var myModule = {};
+
+    function _onBeforeCpanelClose(args) {
+		showBusy(false);
+        //console.log('Harmony, handler for before cpanel close');
+    }
+
+    function _init() {
+        // register to events...
+        api.registerEventHandler('on_ui_cpanel_before_close', myModule, 'onBeforeCpanelClose');
+		// See if we are on ALTUI
+		if (typeof ALTUI_revision=="string") {
+			bOnALTUI = true;
 		}
-	}
-    var html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
-		'<tr><td colspan="2"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>';
-	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
-		html += '<tr><td colspan="2">&nbsp;</td></tr><tr><td colspan="2">Plugin is disabled in Attributes.</td></tr>';
-	} else {		
-		html+= hamhtmlAddInput(deviceID, 'Harmony Hub IP Address', 30, 'HubIPAddress')+
-		hamhtmlAddPulldown(deviceID, 'Ok Acknowledge Interval', 'OkInterval', timeAck, true)+
-		hamhtmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel, true)+
-		hamhtmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo, true)+
-		hamhtmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo, true)+
-		hamhtmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel, true);
-	}	
-	html += '</tbody></table>';
-    set_panel_html(html);
-}
-
-// Request HTML for activities tab
-function hamActivities(deviceID) {
-	var deviceObj = get_device_obj(deviceID);
-	var html = '<div id="hamID_content_AC_'+deviceID+'">'+
-		'<table width="100%" border="0"><tbody>'+
-		'<tr><td class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
-		'<tr><td>&nbsp;</td></tr>';
-	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
-		html += '<tr><td>Plugin is disabled in Attributes.</td></tr>';
-	} else {	
-		var actjs = hamVarGet(deviceID,'Activities');
-		if (actjs != '') {
-			var acts = JSON.parse(actjs).activities;
+    }
+	
+	// Return HTML for settings tab
+	function _Settings() {
+		_init();
+        try {
+			var deviceID = api.getCpanelDeviceId();
+			var deviceObj = api.getDeviceObject(deviceID);
+			var timeAck = [{'value':'0','label':'None'},{'value':'1','label':'1 Sec'},{'value':'2','label':'2 Sec'},{'value':'3','label':'3 Sec'}];
+			var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
+			var logLevel = [{'value':'1','label':'Error'},{'value':'2','label':'Warning'},{'value':'8','label':'Info'},{'value':'11','label':'Debug'}];
 			var actSel = [{ 'value':'','label':'None'}];
-			for (var i=0; i<acts.length; i++) {
-				actSel.push({ 'value':acts[i].ID,'label':acts[i].Activity});
+			for (var i=1; i<=HAM_MAXBUTTONS; i++) {
+				var actID = varGet(deviceID,'ActivityID'+i);
+				var actDesc = varGet(deviceID,'ActivityDesc'+i);
+				if (actID !== '' && actDesc !== '') {
+					actSel.push({'value':actID,'label':actDesc});
+				}
 			}
-			html += '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
-				'<tr><td width="140"><b>Activity mappings</b></td><td colspan="3"></td></tr>'+
-				hamhtmlAddButton(deviceID,'UpdateButtons',4)+
-				'<tr><td colspan="4">'+
-				'<div id="ham_msg">Select activities you want to be able to control and click Save Changes. <br>'+
-				'The labels should fit a button, normally 7 or 8 characters max.<br>'+
-				'A reload command may be performed automatically.</div>'+
-				'<p></td></tr>';
-			for (i=1; i<=HAM_MAXBUTTONS; i++) {
-				html += hamhtmlAddMapping(deviceID, 'Activity ID button '+i,'ActivityID'+i,actSel,'Label button '+i,'ActivityDesc'+i);
+			var html = '<div class="deviceCpanelSettingsPage">'+
+				'<h3>Device #'+deviceID+'&nbsp;&nbsp;&nbsp;'+api.getDisplayedDeviceName(deviceID)+'</h3>';
+			if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
+				html += '<br>Plugin is disabled in Attributes.';
+			} else {
+				if (bOnALTUI) {
+					var udObj = api.getUserData();	
+					// We are running on openLuup locally, for now we assume if bridged then it is a Vera.
+//					bControllerIsVera = !(Boolean((udObj.BuildVersion === "*1.7.0*") && (deviceObj.id_parent == 0)));
+					if (udObj.BuildVersion === '*1.7.0*' && deviceObj.id_parent != 0) {
+						var vp = varGet(deviceObj.id_parent,'RemotePort',VB_SID);
+						bControllerIsVera = Boolean(vp !== ':3480');
+					}
+// always gives local controller, looking for bridged.
+//					var ctrnum = MultiBox.controllerOf(deviceObj.altuiid).controller;
+//					bControllerIsVera = !MultiBox.getControllers()[ctrnum].controller.isOpenLuup();
+				}	
+				html +=	htmlAddInput(deviceID, 'Harmony Hub IP Address', 20, 'HubIPAddress') + 
+				htmlAddPulldown(deviceID, 'Ok Acknowledge Interval', 'OkInterval', timeAck)+
+				htmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel);
+//				htmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo);
+				if (bControllerIsVera) {
+					html +=	htmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo);
+				}
+				html +=	htmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel)+
+				htmlAddButton(deviceID, 'UpdateSettings');
 			}
-			html += '</tbody></table>';
-		} else {
-			html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
-				'<tr><td>&nbsp;</td></tr>'+
-				'<tr><td>Activities not loaded. Click the Update Configuration button.</td></tr></table>';
-		}	
+			html += '</div>';
+			api.setCpanelContent(html);
+        } catch (e) {
+            Utils.logError('Error in Harmony.Settings(): ' + e);
+        }
 	}
-	html += '<tr><td>&nbsp;</td></tr></tbody></table>';
-    set_panel_html(html);
-}
 
-// Return HTML for devices tab
-function hamDevices(deviceID) {
-	var deviceObj = get_device_obj(deviceID);
-	var html = '<div id="hamID_content_DH_'+deviceID+'">'+
-		'<table width="100%" border="0"><tbody>'+
-		'<tr><td class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
-		'<tr><td>&nbsp;</td></tr>';
-	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
-		html += '<tr><td>Plugin is disabled in Attributes.</td></tr>';
-	} else {	
-		var devList = [];
-		var lampList = [];
-		var devJs = varGet(deviceID,'Devices');
-		var lampJs = varGet(deviceID,'Lamps');
-		var devHtml = 'Devices not loaded. Check Hub configuration and click the Update Configuration button.';
-		var lampHtml = '';
-		if (devJs != '') {
-			var devs = JSON.parse(devJs).devices;
-			for (var i=0; i<devs.length; i++) {
-				devList.push({ 'value':devs[i].ID,'label':devs[i].Device });
+	// Request HTML for activities tab
+	function _Activities() {
+		_init();
+        try {
+			var deviceID = api.getCpanelDeviceId();
+			var deviceObj = api.getDeviceObject(deviceID);
+			var html = '<div class="deviceCpanelSettingsPage">'+
+				'<h3>Device #'+deviceID+'&nbsp;&nbsp;&nbsp;'+api.getDisplayedDeviceName(deviceID)+'</h3>'+
+				'<div id="hamID_content_AC_'+deviceID+'">';
+			if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
+				html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
+					'<tr><td>&nbsp;</td></tr>'+
+					'<tr><td>Plugin is disabled in Attributes.</td></tr></table>';
+			} else {	
+				// Parse Activity IDs to make button selections
+				var actjs = varGet(deviceID,'Activities');
+				if (actjs != '') {
+					var acts = JSON.parse(actjs).activities;
+					var actSel = [{ 'value':'','label':'None'}];
+					for (var i=0; i<acts.length; i++) {
+						actSel.push({'value':acts[i].ID,'label':acts[i].Activity});
+					}
+					html += '<b>Activity mappings</b>'+
+						htmlAddButton(deviceID,'UpdateButtons')+
+						'<div id="ham_msg">Select activities you want to be able to control and click Save Changes.<br>'+
+						'The labels should fit a button, normally 7 or 8 characters max.<br>'+
+						'A reload command may be performed automatically.</div>'+
+						'<p>';
+					for (i=1; i<=HAM_MAXBUTTONS; i++) {
+						html += htmlAddMapping(deviceID, 'Button '+i+'&nbsp;&nbsp;Activity ID','ActivityID'+i,actSel,'Label','ActivityDesc'+i);
+					}
+				} else {
+					html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
+						'<tr><td>&nbsp;</td></tr>'+
+						'<tr><td>Activities not loaded. Click the Update Configuration button.</td></tr></table>';
+				}	
+				html += '</div></div>';
 			}
-			devHtml = hamhtmlAddPulldownMultiple(deviceID, 'Devices to Control', 'PluginHaveChildren', devList)+'<p>';
-		}
-		if (lampJs != '') {
-			var devs = JSON.parse(lampJs).lamps;
-			for (var i=0; i<devs.length; i++) {
-				lampList.push({ 'value':devs[i].udn,'label':devs[i].name });
-			}
-			lampHtml = '<p>'+hamhtmlAddPulldownMultiple(deviceID, 'Lamps to Control', 'PluginHaveLamps', lampList)+'<p>';
-		}
-		html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
-			'<tr><td width=200><b>Device selection</b></td><td></td></tr>'+
-			hamhtmlAddButton(deviceID,'UpdateDeviceSelections',2)+
-			'<tr><td colspan="2">'+
-			'<div id="ham_msg">Select device(s) you want to be able to control and click Save Changes.<br>'+
-			'For each selected a child device will be created.<br>'+
-			'A reload command may be performed automatically.</div>'+
-			'</td></tr>'+devHtml+lampHtml+
-			hamhtmlAddPulldown(deviceID, 'Create child devices embedded', 'PluginEmbedChildren', yesNo)+
-			'</tbody></table>';
-	}	
-	html += '<tr><td>&nbsp;</td></tr></tbody></table>';
-    set_panel_html(html);
-}
+			api.setCpanelContent(html);			
+        } catch (e) {
+            Utils.logError('Error in Harmony.Activities(): ' + e);
+        }
+	}
 
-// Return HTML for device settings tab
-function hamDeviceSettings(deviceID) {
-	var deviceObj = get_device_obj(deviceID);
-	var html = '<div id="hamID_content_DS_'+deviceID+'">'+
-		'<table width="100%" border="0"><tbody>'+
-		'<tr><td class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
-		'<tr><td>&nbsp;</td></tr>';
-	var prntObj = get_device_obj(deviceObj.id_parent);
-	if (prntObj.disabled === '1' || prntObj.disabled === 1) {
-		html += '<tr><td>Plugin is disabled in Attributes.</td></tr>';
-	} else {	
-		var cmdjs = hamVarGet(deviceID,'DeviceCommands',HAM_CHSID);
-		if (cmdjs != '') {
-			var funcs = JSON.parse(cmdjs).Functions;
-			var actSel = [{ 'value':'','label':'None'}];
-			for (var j=0; j<funcs[i].Commands.length; j++) {
-				actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
+	// Return HTML for devices tab
+	function _Devices() {
+		_init();
+        try {
+			var deviceID = api.getCpanelDeviceId();
+			var deviceObj = api.getDeviceObject(deviceID);
+			var html = '<div class="deviceCpanelSettingsPage">'+
+				'<h3>Device #'+deviceID+'&nbsp;&nbsp;&nbsp;'+api.getDisplayedDeviceName(deviceID)+'</h3>'+
+				'<div id="hamID_content_DH_'+deviceID+'">';
+			if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
+				html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
+					'<tr><td>&nbsp;</td></tr>'+
+					'<tr><td>Plugin is disabled in Attributes.</td></tr></table>';
+			} else {	
+				var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
+				var devList = [];
+				var lampList = [];
+				var devJs = varGet(deviceID,'Devices');
+				var lampJs = varGet(deviceID,'Lamps');
+				var devHtml = 'Devices not loaded. Check Hub configuration and click the Update Configuration button.';
+				var lampHtml = '';
+				if (devJs != '') {
+					var devs = JSON.parse(devJs).devices;
+					for (var i=0; i<devs.length; i++) {
+						devList.push({ 'value':devs[i].ID,'label':devs[i].Device });
+					}
+					devHtml = htmlAddPulldownMultiple(deviceID, 'Devices to Control', 'PluginHaveChildren', devList)+'<p>';
+				}
+				if (lampJs != '') {
+					var devs = JSON.parse(lampJs).lamps;
+					for (var i=0; i<devs.length; i++) {
+						lampList.push({ 'value':devs[i].udn,'label':devs[i].name });
+					}
+					lampHtml = '<p>'+htmlAddPulldownMultiple(deviceID, 'Lamps to Control', 'PluginHaveLamps', lampList)+'<p>';
+				}
+				html += '<b>Device selection</b>'+
+					'<p>'+
+					'<div id="ham_msg">Select device(s) and/or Lamp(s) you want to be able to control and click Save Changes.<br>'+
+					'For each selected a child device will be created.<br>'+
+					'A reload command may be performed automatically.</div>'+
+					'<p>'+
+					devHtml+lampHtml+
+					'<p>'+
+					htmlAddPulldown(deviceID, 'Create child devices embedded', 'PluginEmbedChildren', yesNo)+
+					htmlAddButton(deviceID,'UpdateDeviceSelections')+
+					'</div></div>';
+			}
+			api.setCpanelContent(html);			
+        } catch (e) {
+            Utils.logError('Error in Harmony.Devices(): ' + e);
+        }
+	}
+
+	// Return HTML for device settings tab
+	function _DeviceSettings() {
+		_init();
+        try {
+			var deviceID = api.getCpanelDeviceId();
+			var deviceObj = api.getDeviceObject(deviceID);
+			var prntObj = api.getDeviceObject(deviceObj.id_parent);
+			var html = '<div class="deviceCpanelSettingsPage">'+
+				'<h3>Device #'+deviceID+'&nbsp;&nbsp;&nbsp;'+api.getDisplayedDeviceName(deviceID)+'</h3>'+
+				'<div id="hamID_content_DS_'+deviceID+'">';
+			if (prntObj.disabled === '1' || prntObj.disabled === 1) {
+				html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
+					'<tr><td>&nbsp;</td></tr>'+
+					'<tr><td>Plugin is disabled in Attributes.</td></tr></table>';
+			} else {	
+				var cmdjs = varGet(deviceID,'DeviceCommands',HAM_CHSID);
+				if (cmdjs != '') {
+					var funcs = JSON.parse(cmdjs).Functions;
+					var actSel = [{ 'value':'','label':'None'}];
+					for (var i=0; i<funcs.length; i++) {
+						for (var j=0; j<funcs[i].Commands.length; j++) {
+							actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
+						}	
+					}
+					html += '<b>Device Command mappings</b>'+
+						htmlAddButton(deviceID,'UpdateDeviceButtons')+
+						'<div id="ham_msg">Select commands you want to be able to control and click Save Changes.<br>'+
+						'The labels should fit a button, normally 7 or 8 characters max.<br>'+
+						'A reload command may be performed automatically.</div>'+
+						'<p>';
+					for (i=1; i<=HAM_MAXBUTTONS; i++) {
+						html += htmlAddMapping(deviceID, 'Button '+i+' Command','Command'+i,actSel,'Label','CommandDesc'+i, HAM_CHSID);
+					}
+				} else {
+					html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
+						'<tr><td>&nbsp;</td></tr>'+
+						'<tr><td>Commands not loaded. Click the Update Configuration button in the main device.</td></tr></table>';
+				}	
+				html += '</div></div>';
+			}
+			api.setCpanelContent(html);			
+        } catch (e) {
+            Utils.logError('Error in Harmony.DeviceSettings(): ' + e);
+        }
+	}
+
+	// Build HTML for child device settings tab
+	function _DeviceSettingsHandler(deviceID, result) {
+		try {
+			// We should have received a JSON object.
+			var html = '';
+			if (typeof result=="object") {
+				if (result.code==200) {
+					var actSel = [{ 'value':'','label':'None'}];
+					var funcs = result.data.Functions
+					for (var i=0; i<funcs.length; i++) {
+						for (var j=0; j<funcs[i].Commands.length; j++) {
+							actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
+						}	
+					}
+					html += '<b>Device Command mappings</b>'+
+						htmlAddButton(deviceID,'UpdateDeviceButtons')+
+						'<div id="ham_msg">Select commands you want to be able to control and click Save Changes.<br>'+
+						'The labels should fit a button, normally 7 or 8 characters max.<br>'+
+						'A reload command may be performed automatically.</div>'+
+						'<p>';
+					for (i=1; i<=HAM_MAXBUTTONS; i++) {
+						html += htmlAddMapping(deviceID, 'Button '+i+' Command','Command'+i,actSel,'Label','CommandDesc'+i, HAM_CHSID);
+					}
+				} else {
+					html += "Error occurred: "+result.msg;
+				}	
+			} else {
+				// Report failure to user
+				if (typeof result=="string") {
+					html = result;
+				} else {
+					html = "Unknown error occurred. Try again in a minute.";
+				}
+			}
+			$("#hamID_content_DS_"+deviceID).html(html);
+		} catch (e) {
+            Utils.logError('Error in Harmony.DeviceSettingsHandler(): ' + e);
+        }
+		showBusy(false);
+	}
+
+	// Update variable in user_data and lu_status
+	function varSet(deviceID, varID, varVal, sid) {
+		if (typeof(sid) == 'undefined') { sid = HAM_SID; }
+		api.setDeviceStateVariablePersistent(deviceID, sid, varID, varVal);
+	}
+	// Get variable value. When variable is not defined, this new api returns false not null.
+	function varGet(deviceID, varID, sid) {
+		try {
+			if (typeof(sid) == 'undefined') { sid = HAM_SID; }
+			var res = api.getDeviceState(deviceID, sid, varID);
+			if (res !== false && res !== null && res !== 'null' && typeof(res) !== 'undefined') {
+				return res;
+			} else {
+				return '';
 			}	
-			html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
-				'<tr><td colspan="4" class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
-				'<tr><td colspan="4"><div><b>Device Command mappings</b></div></td></tr>'+
-				hamhtmlAddButton(deviceID,'UpdateDeviceButtons',4)+
-				'<tr><td colspan="4">'+
-				'<div id="ham_msg">Select commands you want to be able to control and click Save Changes.<br>'+
-				'The labels should fit a button, normally 7 or 8 characters max.<br>'+
-				'A reload command will be performed automatically.</div>'+
-				'</td></tr>';
-			for (i=1; i<=HAM_MAXBUTTONS; i++) {
-				html += hamhtmlAddMapping(deviceID, 'Button '+i+' Command','Command'+i,actSel,'Label','CommandDesc'+i, HAM_CHSID);
+        } catch (e) {
+            return '';
+        }
+	}
+
+	function _UpdateSettings(deviceID) {
+		// Save variable values so we can access them in LUA without user needing to save
+		showBusy(true);
+//		var devicePos = api.getDeviceIndex(deviceID);
+		varSet(deviceID,'HubIPAddress',htmlGetElemVal(deviceID, 'HubIPAddress'));
+		varSet(deviceID,'OkInterval',htmlGetElemVal(deviceID, 'OkInterval'));
+		varSet(deviceID,'DefaultActivity',htmlGetPulldownSelection(deviceID, 'DefaultActivity'));
+//		varSet(deviceID,'HTTPServer',htmlGetPulldownSelection(deviceID, 'HTTPServer'));
+		if (bControllerIsVera) {
+			varSet(deviceID,'RemoteImages',htmlGetPulldownSelection(deviceID, 'RemoteImages'));
+		}
+		varSet(deviceID,'LogLevel',htmlGetPulldownSelection(deviceID, 'LogLevel'));
+		application.sendCommandSaveUserData(true);
+		setTimeout(function() {
+			doReload(deviceID);
+			showBusy(false);
+			try {
+				api.ui.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0);
 			}
-			html += '</tbody></table>';
+			catch (e) {
+				myInterface.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0); // ALTUI
+			}
+		}, 3000);	
+	}
+	// Update the buttons for the main device.
+	function _UpdateButtons(deviceID) {
+		// Save variable values so we can access them in LUA without user needing to save
+		var bChanged = false;
+		showBusy(true);
+		for (var icnt=1; icnt <= HAM_MAXBUTTONS; icnt++) {
+			var idval = htmlGetElemVal(deviceID, 'ActivityID'+icnt);
+			var labval = htmlGetElemVal(deviceID, 'ActivityDesc'+icnt);
+			var orgid = varGet(deviceID,'ActivityID'+icnt);
+			var orglab = varGet(deviceID,'ActivityDesc'+icnt);
+			// Check for empty Activity descriptions, and default to activity
+			if (idval !== '' && labval === '') {
+				var s = document.getElementById('hamID_ActivityID'+icnt+deviceID);
+				labval = s.options[s.selectedIndex].text;
+				labval = labval.substr(0,8);
+			}
+			if (idval != orgid) {
+				varSet(deviceID,'ActivityID'+icnt, idval);
+				bChanged=true;
+			}	
+			if (labval != orglab) {
+				varSet(deviceID,'ActivityDesc'+icnt, labval);
+				bChanged=true;
+			}	
+		}
+		// If we have changes, update buttons.
+		if (bChanged) {
+			application.sendCommandSaveUserData(true);
+			api.performLuActionOnDevice(deviceID, HAM_SID, 'UpdateButtons', {});
+			setTimeout(function() {
+				showBusy(false);
+				htmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!",false);
+			}, 3000);	
 		} else {
-			html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
-				'<tr><td>&nbsp;</td></tr>'+
-				'<tr><td>Commands not loaded. Click the Update Configuration button in the main device.</td></tr></table>';
+			showBusy(false);
+			htmlSetMessage("You have not changed any values.<br>No changes to the buttons made.",true);
 		}	
-	}	
-	html += '<tr><td>&nbsp;</td></tr></tbody></table>';
-    set_panel_html(html);
-}
-
-
-function hamVarSet(deviceID, varID, newValue, sid) {
-//	set_device_state(deviceID,  HAM_SID, varID, newValue);
-	if (typeof(sid) == 'undefined') { sid = HAM_SID; }
-	set_device_state(deviceID,  sid, varID, newValue, 0);	// Save in user_data so it is there after luup reload
-	set_device_state(deviceID,  sid, varID, newValue, 1); // Save in lu_status so it is directly available for others.
-}
-
-function hamVarGet(deviceID, varID, sid) {
-	if (typeof(sid) == 'undefined') { sid = HAM_SID; }
-	var res = get_device_state(deviceID,sid,varID);
-//	var res = get_device_state(deviceID,sid,varID,1);
-	res = (res !== false && res !== 'false' && res !== null  && typeof(res) !== 'undefined') ? res : '';
-	return res;
-}
-
-function hamUpdateButtons(deviceID) {
-	// Save variable values so we can access them in LUA without user needing to save
-	var bChanged = false;
-	for (icnt=1; icnt <= HAM_MAXBUTTONS; icnt++) {
-		var idval=hamhtmlGetElemVal(deviceID,'ActivityID'+icnt);
-		var labval=hamhtmlGetElemVal(deviceID,'ActivityDesc'+icnt);
-		var orgid = hamVarGet(deviceID,'ActivityID'+icnt);
-		var orglab = hamVarGet(deviceID,'ActivityDesc'+icnt);
-		// Check for empty Activity descriptions, and default to activity
-		if (idval !== '' && labval === '') {
-			var s = document.getElementById('hamID_ActivityID'+icnt+deviceID);
-			labval = s.options[s.selectedIndex].text
-			labval = labval.substr(0,8);
+	}
+	
+	// Update the buttons for the child devices.
+	function _UpdateDeviceButtons(deviceID) {
+		// Save variable values so we can access them in LUA without user needing to save
+		var bChanged = false;
+		showBusy(true);
+		for (var icnt=1; icnt <= HAM_MAXBUTTONS; icnt++) {
+			var idval = htmlGetElemVal(deviceID, 'Command'+icnt);
+			var labval = htmlGetElemVal(deviceID, 'CommandDesc'+icnt);
+			var prsval = htmlGetElemVal(deviceID, 'PrsCommand'+icnt);
+			var orgid = varGet(deviceID,'Command'+icnt, HAM_CHSID);
+			var orglab = varGet(deviceID,'CommandDesc'+icnt, HAM_CHSID);
+			var orgprs = varGet(deviceID,'PrsCommand'+icnt, HAM_CHSID);
+			// Check for empty command descriptions, and default to command
+			if (idval !== '' && labval === '') {
+				var s = document.getElementById('hamID_Command'+icnt+deviceID);
+				labval = s.options[s.selectedIndex].text;
+				labval = labval.substr(0,8);
+			}
+			if (idval != orgid) {
+				varSet(deviceID,'Command'+icnt, idval, HAM_CHSID);
+				bChanged=true;
+			}
+			if (labval != orglab) {
+				varSet(deviceID,'CommandDesc'+icnt, labval, HAM_CHSID);
+				bChanged=true;
+			}	
+			if (prsval != orgprs && idval != '') {
+				varSet(deviceID,'PrsCommand'+icnt, prsval, HAM_CHSID);
+				bChanged=true;
+			}	
 		}
-		if (idval != orgid) {
-			hamSaveVariable(deviceID,'ActivityID'+icnt, idval);
+		// If we have changes, update buttons.
+		if (bChanged) {
+			// Wait a second to send the actual action, as it may have issues not saving all data on time.
+			application.sendCommandSaveUserData(true);
+			api.performLuActionOnDevice(deviceID, HAM_CHSID, 'UpdateDeviceButtons', {});
+			setTimeout(function() {
+				showBusy(false);
+				htmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!",false);
+			}, 3000);	
+		} else {
+			showBusy(false);
+			htmlSetMessage("You have not made any changes.<br>No changes to the buttons made.",true);
+		}	
+	}
+	
+	function _UpdateDeviceSelections(deviceID) {
+		// Get the selection from the pull down
+		var bChanged = false;
+		showBusy(true);
+		var selIDs = htmlGetPulldownSelection(deviceID,'PluginHaveChildren');
+		var orgIDs = varGet(deviceID,'PluginHaveChildren');
+		if (selIDs != orgIDs) {
+			varSet(deviceID,'PluginHaveChildren', selIDs);
 			bChanged=true;
 		}	
-		if (labval != orglab) {
-			hamSaveVariable(deviceID,'ActivityDesc'+icnt, labval);
+		selIDs = htmlGetPulldownSelection(deviceID,'PluginHaveLamps');
+		orgIDs = varGet(deviceID,'PluginHaveLamps');
+		if (selIDs != orgIDs) {
+			varSet(deviceID,'PluginHaveLamps', selIDs);
 			bChanged=true;
 		}	
-	}
-	// If we have changes, update buttons.
-	if (bChanged) {
-		hamSendAction(deviceID, 'UpdateButtons', HAM_SID);
-		hamhtmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!<br>&nbsp;");
-	} else {
-		hamhtmlSetMessage("You have not changed any values.<br>No changes to the buttons made.<br>&nbsp;");
-	}	
-}
-function hamUpdateDeviceButtons(deviceID) {
-	// Save variable values so we can access them in LUA without user needing to save
-	var bChanged = false;
-	for (icnt=1; icnt <= HAM_MAXBUTTONS; icnt++) {
-		var idval=hamhtmlGetElemVal(deviceID,'Command'+icnt);
-		var labval=hamhtmlGetElemVal(deviceID,'CommandDesc'+icnt);
-		var prsval=hamhtmlGetElemVal(deviceID,'PrsCommand'+icnt);
-		var orgid = hamVarGet(deviceID,'Command'+icnt, HAM_CHSID);
-		var orglab = hamVarGet(deviceID,'CommandDesc'+icnt, HAM_CHSID);
-		var orgprs = hamVarGet(deviceID,'PrsCommand'+icnt, HAM_CHSID);
-		// Check for empty Command descriptions, and default to Command
-		if (idval !== '' && labval === '') {
-			var s = document.getElementById('hamID_Command'+icnt+deviceID);
-			labval = s.options[s.selectedIndex].text
-			labval = labval.substr(0,8);
-		}
-		if (idval != orgid) {
-			hamSaveVariable(deviceID,'Command'+icnt, idval, HAM_CHSID);
+		selIDs = htmlGetElemVal(deviceID, 'PluginEmbedChildren');
+		orgIDs = varGet(deviceID, 'PluginEmbedChildren');
+		if (selIDs != orgIDs) {
+			varSet(deviceID,'PluginEmbedChildren', selIDs);
 			bChanged=true;
 		}	
-		if (labval != orglab) {
-			hamSaveVariable(deviceID,'CommandDesc'+icnt, labval, HAM_CHSID);
-			bChanged=true;
+		// If we have changes in child devices, reload device.
+		if (bChanged) {
+			application.sendCommandSaveUserData(true);
+			setTimeout(function() {
+				doReload(deviceID);
+				htmlSetMessage("Changes to configuration made.<br>Now wait for reload to complete and then refresh your browser page!",false);
+				showBusy(false);
+			}, 3000);	
+		} else {
+			showBusy(false);
+			htmlSetMessage("You have not made any changes.<br>No changes made.",true);
+		}
+	}
+	
+	// Standard update for  plug-in pull down variable. We can handle multiple selections.
+	function htmlGetPulldownSelection(di, vr) {
+		var value = $('#hamID_'+vr+di).val() || [];
+		return (typeof value === 'object')?value.join():value;
+	}
+
+	// Get the value of an HTML input field
+	function htmlGetElemVal(di,elID) {
+		var res;
+		try {
+			res=$('#hamID_'+elID+di).val();
+		}
+		catch (e) {	
+			res = '';
+		}
+		return res;
+	}
+
+	function htmlSetMessage(msg,error) {
+		try {
+			if (error === true) {
+				api.ui.showMessagePopupError(msg);
+			} else {
+				api.ui.showMessagePopup(msg,0);
+			}	
 		}	
-		if (prsval != orgprs && idval != '') {
-			hamSaveVariable(deviceID,'PrsCommand'+icnt, prsval, HAM_CHSID);
-			bChanged=true;
+		catch (e) {	
+			$("#ham_msg").html(msg+'<br>&nbsp;');
 		}	
 	}
-	// If we have changes, update buttons.
-	if (bChanged) {
-		hamSendAction(deviceID, 'UpdateDeviceButtons', HAM_CHSID);
-		hamhtmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!<br>&nbsp;");
-	} else {
-		hamhtmlSetMessage("You have not changed any values.<br>No changes to the buttons made.<br>&nbsp;");
-	}	
-}
-function hamUpdateDeviceSelections(deviceID) {
-	// Get the selection from the pull down
-	var bChanged = false;
-	var value = [];
-	var s = document.getElementById('hamID_PluginHaveChildren'+deviceID);
-	for (var i = 0; i < s.options.length; i++) {
-		if (s.options[i].selected === true) {
-			value.push(s.options[i].value);
-		}
-	}
-	var selIDs = value.join();
-	var orgIDs = hamVarGet(deviceID,'PluginHaveChildren');
-	if (selIDs != orgIDs) {
-		hamSaveVariable(deviceID,'PluginHaveChildren', selIDs);
-		bChanged=true;
-	}	
-	selIDs = hamhtmlGetElemVal(deviceID, 'PluginEmbedChildren');
-	orgIDs = hamVarGet(deviceID, 'PluginEmbedChildren');
-	if (selIDs != orgIDs) {
-		hamSaveVariable(deviceID,'PluginEmbedChildren', selIDs);
-	}	
-	// If we have changes in child devices, reload.
-	if (bChanged) {
-		hamhtmlSetMessage("Changes to child devices made.<br>Now wait for reload to complete and then refresh your browser page!<br>&nbsp;");
-		hamReload(deviceID);
-	} else {
-		hamhtmlSetMessage("You have not selected any other devices.<br>No changes made.<br>&nbsp;");
-	}
-}
-function hamhtmlGetElemVal(di,elID) {
-	var res;
-	try {
-		res=document.getElementById('hamID_'+elID+di).value;
-	}
-	catch (e) {	
-		res = '';
-	}
-	return res;
-}
-// Standard update for  plug-in pull down variable. We can handle multiple selections.
-function hamhtmlGetPulldownSelection(di, vr) {
-	var value = [];
-	var s = document.getElementById('hamID_'+vr+di);
-	for (var i = 0; i < s.options.length; i++) {
-		if (s.options[i].selected === true) {
-			value.push(s.options[i].value);
-		}
-	}
-	return value.join();
-}
-function hamhtmlSetMessage(msg) {
-	document.getElementById ("ham_msg").innerHTML = msg;
-}
-
-// Add a label and pulldown selection
-function hamhtmlAddPulldown(di, lb, vr, values, onchange) {
-	var extra = '';
-	onchange = (onchange === null) ? false : onchange;
-	var selVal = hamVarGet(di, vr);
-	if (onchange === true) {
-		extra ='onChange="hamUpdatePulldown('+di+',\''+vr+'\',this.value)" ';
-	}
-	var html = '<tr><td>'+lb+'</td><td>'+
-		'<select id="hamID_'+vr+di+'" '+extra+'class="styled">';
-	for(var i=0;i<values.length;i++){
-		html += '<option value="'+values[i].value+'" '+((values[i].value==selVal)?'selected':'')+'>'+values[i].label+'</option>';
-	}
-	html += '</select></td></tr>';
-	return html;
-}
-function hamUpdatePulldown(di, vr) {
-	var value = [];
-	var s = document.getElementById('hamID_'+vr+di);
-	for (var i = 0; i < s.options.length; i++) {
-		if (s.options[i].selected === true) {
-			value.push(s.options[i].value);
-		}
-	}
-	hamVarSet(di, vr, value.join());
-}
-
-// Add a label and multiple selection
-function hamhtmlAddPulldownMultiple(di, lb, vr, values) {
-	var selVal = hamVarGet(di, vr);
-	var selected = [];
-	if (selVal !== '') {
-		selected = selVal.split(',');
-	}
-	var html = '<tr><td>'+lb+'</td><td>'+
-		'<select id="hamID_'+vr+di+'" multiple>';
-	for(var i=0;i<values.length;i++){
-		html+='<option value="'+values[i].value+'" ';
-		for (var j=0;j<selected.length;j++) {
-			html += ((values[i].value==selected[j])?'selected':'');
+	function htmlSetLoadMessage(deviceID,typ,msg,disabled) {
+		var html = '<div class="deviceCpanelSettingsPage">'+
+			'<h3>Device #'+deviceID+'&nbsp;&nbsp;&nbsp;'+api.getDisplayedDeviceName(deviceID)+'</h3>';
+		html += '<div id="hamID_content_'+typ+'_'+deviceID+'">'+
+			'<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
+			'<tr><td>&nbsp;</td></tr>'+
+			'<tr><td>'+msg+'</td></tr>'+
+			'<tr><td>&nbsp;</td></tr>';
+		if (disabled !== true) {	
+			'<tr><td align="center">Please wait...</td></tr>';
 		}	
-		html +=	'>'+values[i].label+'</option>';
+		html += '</table></div></div>';
+		api.setCpanelContent(html);
+		showBusy(true);
 	}
-	html += '</select></td></tr>';
-	return html;
-}
 
-function hamhtmlAddInput(di, lb, si, vr, sid) {
-	val = (typeof df != 'undefined') ? df : hamVarGet(di,vr,sid);
-	var typ = (vr.toLowerCase() == 'password') ? 'type="password"' : 'type="text"';
-	var html = '<tr><td>'+lb+'</td><td><input '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'" '+
-		'onchange="hamVarSet('+di+',\''+vr+'\' , this.value);"></td></tr>';
-	return html;
-}
-
-// Add label, pulldown, label, input
-function hamhtmlAddMapping(di, lb1, vr1, values, lb2, vr2, sid) {
-	var selVal = hamVarGet(di, vr1, sid);
-	var html = '<tr>'+
-		'<td>'+lb1+'</td>'+
-		'<td><select id="hamID_'+vr1+di+'">';
-	for(var i=0;i<values.length;i++){
-		html += '<option value="'+values[i].value+'" '+((values[i].value==selVal)?'selected':'')+'>'+values[i].label+'</option>';
-	}
-	html += '</select></td>'+
-		'<td>'+lb2+'</td>'+
-		'<td><input id="hamID_'+vr2+di+'" size="10" type="text" value="'+hamVarGet(di,vr2,sid)+'"></td>';
-	// V2.5, for Devices the key-press can be longer then just a click.	
-	if (typeof sid != 'undefined') {
-		var timeDuration = [{'value':'0','label':'Click'},{'value':'1','label':'1 Sec'},{'value':'2','label':'2 Sec'},{'value':'3','label':'3 Sec'},{'value':'4','label':'4 Sec'},{'value':'5','label':'5 Sec'},{'value':'7','label':'7 Sec'},{'value':'10','label':'10 Sec'},{'value':'15','label':'15 Sec'}];
-		var selDur = hamVarGet(di, 'Prs'+vr1, sid);
-		html += '<td>Press</td>'+
-			'<td>'+
-			'<select id="hamID_Prs'+vr1+di+'">';
-		for(i=0;i<timeDuration.length;i++){
-			html += '<option value="'+timeDuration[i].value+'" '+((''+timeDuration[i].value==selDur)?'selected':'')+'>'+timeDuration[i].label+'</option>';
+	// Add label, pulldown, label, input
+	function htmlAddMapping(di, lb1, vr1, values, lb2, vr2, sid) {
+		try {
+			var selVal = varGet(di, vr1, sid);
+			var wdth = (bOnALTUI) ? 'style="width:160px;"' : '';  // Use on ALTUI
+			var html = '<div class="clearfix labelInputContainer">'+
+				'<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" '+wdth+'>'+lb1+'</div>'+
+				'<div class="pull-left customSelectBoxContainer" style="width:160px;">'+
+				'<select id="hamID_'+vr1+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:160px;">';
+			for(var i=0;i<values.length;i++){
+				html += '<option value="'+values[i].value+'" '+((''+values[i].value==selVal)?'selected':'')+'>'+values[i].label+'</option>';
+			}
+			html += '</select>'+
+				'</div>';
+			html += '<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="margin-left:50px; width:40px;">'+lb2+'</div>'+
+				'<div class="pull-left">'+
+					'<input class="customInput '+((bOnALTUI) ? 'altui-ui-input form-control form-control-sm' : '')+'" style="width:160px;" id="hamID_'+vr2+di+'" size="15" type="text" value="'+varGet(di,vr2,sid)+'">'+
+				'</div>';
+			if (typeof sid != 'undefined') {
+				var timeDuration = [{'value':'0','label':'Click'},{'value':'1','label':'1 Sec'},{'value':'2','label':'2 Sec'},{'value':'3','label':'3 Sec'},{'value':'4','label':'4 Sec'},{'value':'5','label':'5 Sec'}];
+				var selDur = varGet(di, 'Prs'+vr1, sid);
+				html += '<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="margin-left:50px; width:60px;">Press</div>'+
+				'<div class="pull-left customSelectBoxContainer" style="width:80px;">'+
+				'<select id="hamID_Prs'+vr1+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:80px;">';
+				for(i=0;i<timeDuration.length;i++){
+					html += '<option value="'+timeDuration[i].value+'" '+((''+timeDuration[i].value==selDur)?'selected':'')+'>'+timeDuration[i].label+'</option>';
+				}
+				html += '</select>'+
+					'</div>';
+			}	
+			html += '</div>';
+			return html;
+		} catch (e) {
+			Utils.logError('Harmony: htmlAddMapping(): ' + e);
 		}
-		html += '</select>'+
-			'</td>';
-	}	
-	html += '</tr>';
-	return html;
-}
+	}
 
-// Add a Save Settings button
-function hamhtmlAddButton(di,cb,cs) {
-	html = '<tr><td align="right" colspan="'+cs+'"><input class="btn" type="button" value="Save Changes" onclick="ham'+cb+'(\''+di+'\');"></input></td></tr>';
-	return html;
-}
+	// Add a label and pulldown selection
+	function htmlAddPulldown(di, lb, vr, values) {
+		try {
+			var selVal = varGet(di, vr);
+			var html = '<div class="clearfix labelInputContainer">'+
+				'<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="width:280px;">'+lb+'</div>'+
+				'<div class="pull-left customSelectBoxContainer">'+
+				'<select id="hamID_'+vr+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:200px;">';
+			for(var i=0;i<values.length;i++){
+				html += '<option value="'+values[i].value+'" '+((values[i].value==selVal)?'selected':'')+'>'+values[i].label+'</option>';
+			}
+			html += '</select>'+
+				'</div>'+
+				'</div>';
+			return html;
+		} catch (e) {
+			Utils.logError('Harmony: htmlAddPulldown(): ' + e);
+		}
+	}
+	// Add a label and multiple selection
+	function htmlAddPulldownMultiple(di, lb, vr, values) {
+		try {
+			var selVal = varGet(di, vr);
+			var selected = [];
+			if (selVal !== '') {
+				selected = selVal.split(',');
+			}
+			var html = '<div class="clearfix labelInputContainer">'+
+				'<div class="pull-left inputLabel" style="width:280px;">'+lb+'</div>'+
+				'<div class="pull-left">'+
+				'<select id="hamID_'+vr+di+'" multiple>';
+			for(var i=0;i<values.length;i++){
+				html+='<option value="'+values[i].value+'" ';
+				for (var j=0;j<selected.length;j++) {
+					html += ((values[i].value==selected[j])?'selected':'');
+				}	
+				html +=	'>'+values[i].label+'</option>';
+			}
+			html += '</select>'+
+				'</div>'+
+				'</div>';
+			return html;
+		} catch (e) {
+			Utils.logError('Harmony: htmlAddPulldownMultiple(): ' + e);
+		}
+	}
 
-function hamReload(deviceID) {
-	requestURL = data_request_url + 'id=lu_action';
-	requestURL += '&serviceId=urn:micasaverde-com:serviceId:HomeAutomationGateway1&timestamp='+new Date().getTime()+'&action=Reload';
-	var xmlHttp = new XMLHttpRequest();
-	xmlHttp.open("GET", requestURL, false);
-	xmlHttp.send(null);
-}
+	// Add a standard input for a plug-in variable.
+	function htmlAddInput(di, lb, si, vr, sid, df) {
+		var val = (typeof df != 'undefined') ? df : varGet(di,vr,sid);
+		var typ = (vr.toLowerCase() == 'password') ? 'type="password"' : 'type="text"';
+		var html = '<div class="clearfix labelInputContainer">'+
+					'<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="width:280px;">'+lb+'</div>'+
+					'<div class="pull-left">'+
+						'<input class="customInput '+((bOnALTUI) ? 'altui-ui-input form-control form-control-sm' : '')+'" style="width:200px;" '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'">'+
+					'</div>'+
+				   '</div>';
+		if (vr.toLowerCase() == 'password') {
+			html += '<div class="clearfix labelInputContainer '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'">'+
+					'<div class="pull-left inputLabel" style="width:280px;">&nbsp; </div>'+
+					'<div class="pull-left '+((bOnALTUI) ? 'form-check' : '')+'" style="width:200px;">'+
+						'<input class="pull-left customCheckbox '+((bOnALTUI) ? 'form-check-input' : '')+'" type="checkbox" id="hamID_'+vr+di+'Checkbox">'+
+						'<label class="labelForCustomCheckbox '+((bOnALTUI) ? 'form-check-label' : '')+'" for="hamID_'+vr+di+'Checkbox">Show Password</label>'+
+					'</div>'+
+				   '</div>';
+			html += '<script type="text/javascript">'+
+					'$("#hamID_'+vr+di+'Checkbox").on("change", function() {'+
+					' var typ = (this.checked) ? "text" : "password" ; '+
+					' $("#hamID_'+vr+di+'").prop("type", typ);'+
+					'});'+
+					'</script>';
+		}
+		return html;
+	}
+	// Add a Save Settings button
+	function htmlAddButton(di, cb) {
+		var html = '<div class="cpanelSaveBtnContainer labelInputContainer clearfix">'+	
+			'<input class="vBtn pull-right btn" type="button" value="Save Changes" onclick="Harmony.'+cb+'(\''+di+'\');"></input>'+
+			'</div>';
+		return html;
+	}
 
-function hamSaveVariable(deviceID, vari, val, sid) {
-	if (typeof(sid) == 'undefined') { sid = HAM_SID; }
-	var cmd = 'luup.variable_set("'+sid+'","'+vari+'","'+val+'",'+deviceID+')';
-	requestURL = data_request_url + 'id=lu_action';
-	requestURL += '&serviceId=urn:micasaverde-com:serviceId:HomeAutomationGateway1&timestamp='+new Date().getTime()+'&action=RunLua&Code='+cmd;
-	var xmlHttp = new XMLHttpRequest();
-	xmlHttp.open("GET", requestURL, false);
-	xmlHttp.send(null);
-}
-function hamSendAction(device, action, sid) {
-	var requestURL = data_request_url + 'id=lu_action&DeviceNum=' + device + '&serviceId=' + sid + '&timestamp=' + new Date().getTime() + '&action=' + action;
-	var xmlHttp = new XMLHttpRequest();
-	xmlHttp.open("GET", requestURL, false);
-	xmlHttp.send(null);
-}
+	// Show/hide the interface busy indication.
+	function showBusy(busy) {
+		if (busy === true) {
+			try {
+				api.ui.showStartupModalLoading(); // version v1.7.437 and up
+			} catch (e) {
+				myInterface.showStartupModalLoading(); // For ALTUI support.
+			}
+		} else {
+			try {
+				api.ui.hideModalLoading(true);
+			} catch (e) {
+				myInterface.hideModalLoading(true); // For ALTUI support
+			}	
+		}
+	}
+
+	function doReload(deviceID) {
+		api.performLuActionOnDevice(0, "urn:micasaverde-com:serviceId:HomeAutomationGateway1", "Reload", {});
+	}
+
+	// Expose interface functions
+    myModule = {
+		// Internal for panels
+        uuid: _uuid,
+        init: _init,
+        onBeforeCpanelClose: _onBeforeCpanelClose,
+		UpdateSettings: _UpdateSettings,
+		UpdateButtons: _UpdateButtons,
+		UpdateDeviceButtons: _UpdateDeviceButtons,
+		UpdateDeviceSelections: _UpdateDeviceSelections,
+		
+		// For JSON calls
+        Settings: _Settings,
+        Activities: _Activities,
+        Devices: _Devices,
+        DeviceSettings: _DeviceSettings
+		
+    };
+    return myModule;
+})(api);
+

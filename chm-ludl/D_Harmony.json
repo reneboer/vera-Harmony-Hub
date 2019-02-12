@@ -47,6 +47,36 @@
 				}
 			]
 		},
+		{ "Label": { 
+				"lang_tag": "settings", 
+				"text": "Settings" 
+			}, 
+			"TopNavigationTab": 1, 
+			"Position": "1", 
+			"TabType": "javascript", 
+			"ScriptName": "J_Harmony.js", 
+			"Function": "Harmony.Settings" 
+		},
+		{ "Label": { 
+				"lang_tag": "activities", 
+				"text": "Activities" 
+			}, 
+			"TopNavigationTab": 1, 
+			"Position": "2", 
+			"TabType": "javascript", 
+			"ScriptName": "J_Harmony.js", 
+			"Function": "Harmony.Activities" 
+		},
+		{ "Label": { 
+				"lang_tag": "devices", 
+				"text": "Devices"
+			}, 
+			"TopNavigationTab": 1, 
+			"Position": "3", 
+			"TabType": "javascript", 
+			"ScriptName": "J_Harmony.js", 
+			"Function": "Harmony.Devices" 
+		},
 		{
 			"Label": {
 				"lang_tag": "advanced",

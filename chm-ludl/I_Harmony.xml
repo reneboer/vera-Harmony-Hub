@@ -64,6 +64,21 @@
     </action>
 	<action>
 		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>SetLogLevel</name>
+		<run>
+			Harmony_SetLogLevel(lul_settings.newLogLevel or "10")
+		</run>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>SetHubIPAddress</name>
+		<job>
+			Harmony_SetHubIPAddress(lul_settings.newIPAddress, lul_settings.newPort)
+			return 4,nil
+		</job>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 		<name>FindActivityByName</name>
 		<run>
 			Harmony_FindActivityByName(lul_settings.ActivityName or "")

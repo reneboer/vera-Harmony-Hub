@@ -11,9 +11,11 @@
 				Fix to avoid config reload attempts when no lamp devices are present.
 				Fix for restarting while HubPolling is disabled. We can now restart with Hub off.
 				HTTP handler is now enabled by default.
+				J_Harmony.js is now for UI7 and openLuup. J_Harmony_UI5.js for old systems.
 				(to do) add action to change log level without reload
 				(to do) add action to change IP address without reload.
 				Some more ConfigFilesAPI rewrites.
+				Better screen message handling incase of errors or incomplete configurations.
 	V3.4 Changes:
 				Setting catagory_num and subcategory_num for Lights. 
 				Setting lamp model and manufacturer in attribute rather than variable.
@@ -208,7 +210,7 @@ local HData = { -- Data used by Harmony Plugin
 				["LWB006"] = 9
 				} -- Wattage for known models, so we can report approx. energy usage. Used to default UserSuppliedWattage.
 }
-
+--[[
 local TaskData = {
 	Description = "Harmony Control",
 	taskHandle = -1,
@@ -217,7 +219,8 @@ local TaskData = {
 	SUCCESS = 4,
 	BUSY = 1
 }
-	
+]]
+
 -- LUA Job Status. Use for handlers
 local JobStatus = {
 	NO_JOB = -1, -- No job, i.e. job doesn't exist.
@@ -395,6 +398,11 @@ local max_length = 100
 		end	
 	end
 	
+	local function _devmessage(devID, status, timeout, ...)
+		local message =  prot_format(-1,...)
+		luup.device_message(devID, status, message, timeout, def_prefix)
+	end
+	
 	return {
 		Initialize = _init,
 		Error = _error,
@@ -403,7 +411,8 @@ local max_length = 100
 		Log = _log,
 		Debug = _debug,
 		Update = _update,
-		LogFile = _logfile
+		LogFile = _logfile,
+		DeviceMessage = _devmessage
 	}
 end 
 
@@ -1506,6 +1515,23 @@ local function ConfigFilesAPI()
 		end
 	end
 
+	-- Remove the Device file for the current device. Only used on openLuup for upgrade to 3.2.
+	local function _removeObsoleteDeviceFiles()
+		local lfs = require("lfs")
+
+		for fname in lfs.dir(FilePath) do
+			local dname = string.match(fname, "D_Harmony"..Dev..".")
+			if dname then 
+				local dnum = string.match(dname, "(%d+)")
+				if dnum then
+					-- We have a device file, see if the number is still in list of child devices
+					log.Warning('Removing obsolete file %s.',fname)
+					os.remove(FilePath..fname)
+				end	
+			end
+		end
+	end
+
 	-- Support functions to build reoccurring JSON elements.
 	local function _buildJsonLabelControl(text,top,left,width,height,grp,dtop,dleft)
 		local str = '{ "ControlType": "label", '
@@ -1717,13 +1743,13 @@ local function ConfigFilesAPI()
 		end
 		-- Add other UI elements
 		tab = 1
-		-- Post UI7 we have a different JS UI file then prior versions.
+		-- For UI5/6 we have a different JS UI file than later versions.
 		local jsFile, jsPfx
 		if IsUI7 then 
-			jsFile = 'J_Harmony_UI7.js'
+			jsFile = 'J_Harmony.js'
 			jsPfx = 'Harmony.'
 		else
-			jsFile = 'J_Harmony.js' 
+			jsFile = 'J_Harmony_UI5.js' 
 			jsPfx = 'ham' 
 		end
 		if isChild then
@@ -1922,7 +1948,8 @@ local function ConfigFilesAPI()
 		Initialize = _init,
 		CreateDeviceFile = _create_D_file,
 		CreateJSONFile = _create_JSON_file,
-		RemoveObsoleteDeviceFiles = _removeObsoleteChildDeviceFiles,
+		RemoveObsoleteChildDeviceFiles = _removeObsoleteChildDeviceFiles,
+		RemoveObsoleteDeviceFiles = _removeObsoleteDeviceFiles,
 		CreateCustomModeConfiguration = _createCustomModeConfiguration
 	}
 end
@@ -1931,7 +1958,7 @@ end
 ---------------------------------------------------------------------------------------------
 -- Harmony Plugin functions
 ---------------------------------------------------------------------------------------------
--- Set message in task window.
+--[[ Set message in task window.
 local function task(text, mode) 
 	local mode = mode or TaskData.ERROR 
 	if (mode ~= TaskData.SUCCESS) then 
@@ -1943,6 +1970,7 @@ local function task(text, mode)
 	end 
 	TaskData.taskHandle = luup.task(text, (mode == TaskData.ERROR_PERM) and TaskData.ERROR or mode, TaskData.Description, TaskData.taskHandle) 
 end 
+]]
 
 -- Check how much memory the plugin uses, and see if we should start/stop polling
 function checkMemory()
@@ -2003,6 +2031,7 @@ local function Harmony_FindDevice(deviceID)
 	for k, v in pairs(luup.devices) do
 		if var.GetAttribute('id_parent', k) == HData.DEVICE then
 			local dev = var.GetNumber("DeviceID",HData.SIDS.CHILD,k)
+log.Debug("Having child device %s, %s",k,dev)		
 			if dev == deviceID then return k end
 		end
 	end
@@ -2117,6 +2146,40 @@ function Harmony_FindDeviceByID(id)
 	var.Set("findResult", "")  -- Need variable to have return value in call_action
 	return false, ""
 end
+
+-- Update the log level.
+function Harmony_SetLogLevel(logLevel)
+	local level = tonumber(logLevel,10) or 10
+	log.Update(level)
+end
+
+-- Update the Hub IP address and then reconnect.
+function Harmony_SetHubIPAddress(ipa, port)
+	local port 
+	local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
+	-- Some cases IP gets stuck in variable and no in attribute (openLuup or ALTUI bug)
+	if ipAddress == nil then
+		return nil,nil,500, "Invalid IP Address."
+	end
+	log.Info("Changing Harmony Hub: IP address %s.",ipAddress)
+	-- If starting with polling disabled, no connection is made with the Hub until the first command is send or polling gets enabled again.
+	local poll = (var.GetNumber("HubPolling") == 1)
+	if not Harmony.Initialize(ipAddress, port, "HH"..HData.DEVICE.."#rboer", poll) then 
+		return nil,nil,500, "Unable to connect to Hub."
+	end
+	var.Set("HubIPAddress",ipAddress)
+	-- Populate details from the Hub V3.0, First startup is never with polling disabled, so should be ok.
+	if poll then
+		local res, data, cde, msg = Harmony.GetHubDetails()
+		if res then
+			var.Set("RemoteID", data.remote_id)	
+			var.Set("AccountID", data.account_id)	
+			var.Set("FriendlyName", data.friendly_name)	
+		end	
+	end
+	return true
+end
+
 
 -- Update the polling flag. If called with "1" then the connection with the Hub will be kept open, else it will close after each command.
 -- If Polling is on and turned off, wait for the hub to be off (current activity == -1)
@@ -3039,7 +3102,7 @@ local function Harmony_SyncDevices(childDevices)
 	local childDeviceIDs = var.Get("PluginHaveChildren")
 	-- See if we have obsolete child xml or json files. If so remove them
 	if (not HData.Plugin_Disabled) and (not HData.onOpenLuup) then 
-		cnfgFile.RemoveObsoleteDeviceFiles(childDeviceIDs) 
+		cnfgFile.RemoveObsoleteChildDeviceFiles(childDeviceIDs) 
 	end
 	if childDeviceIDs == "" then 
 		-- Note: we must continue this routine when there are no child devices as we may have ones that need to be deleted.
@@ -3206,13 +3269,18 @@ local function Harmony_CreateChildren()
 	if childDeviceIDs ~= "" then
 		childDeviceIDs = childDeviceIDs .. ','
 		for deviceID in childDeviceIDs:gmatch("([^,]*),") do
-			local chdev = Harmony_FindDevice(deviceID)
+			local chdev = Harmony_FindDevice(tonumber(deviceID))
 			if chdev then
 				local cnf = var.Get("DeviceCommands",HData.SIDS.CHILD,chdev)
 				if cnf == "" then 
 					-- Force load from config so any new devices get populated with configuration.
 					Harmony_UpdateConfigurations()
-					break
+				end	
+				-- See if devices are setup.
+				local buttons = Harmony_GetButtonData(chdev, HData.SIDS.CHILD, true)
+				if #buttons == 0 then
+					log.Debug("No Commands configured. Put up message.")
+					log.DeviceMessage(chdev, 2, 0, "No Commands configured.")
 				end	
 			end
 		end
@@ -3422,7 +3490,7 @@ function Harmony_Setup()
 	Harmony_GetStateDigest()
 	
 	-- If debug level, keep tap on memory usage too.
-	checkMemory()
+	--checkMemory()
 	setStatusIcon(HData.Icon.IDLE)
 	return true
 end
@@ -3481,10 +3549,10 @@ function Harmony_init(lul_device)
 	-- Set Alt ID on first run, may avoid issues
 	var.SetAttribute('altid', 'HAM'..HData.DEVICE..'_CNTRL')
 	-- Make sure all (advanced) parameters are there
-	local email = var.Default("Email")
-	local pwd = var.Default("Password")
-	local commTimeOut = tonumber(var.Default("CommTimeOut",5))
-	var.Default("HTTPServer", 0)
+--	local email = var.Default("Email")
+--	local pwd = var.Default("Password")
+--	local commTimeOut = tonumber(var.Default("CommTimeOut",5))
+--	var.Default("HTTPServer", 0)
 	var.Default("OkInterval",3)
 --	var.Default("AuthorizationToken")
 	var.Default("PluginHaveChildren")
@@ -3543,9 +3611,9 @@ function Harmony_init(lul_device)
 				end
 			end	
 
-			-- Rome child device static JSONs.
-			cnfgFile.RemoveObsoleteDeviceFiles("") 
-			
+			-- Remove no longer needed device static JSONs and XMLs.
+			cnfgFile.RemoveObsoleteDeviceFiles() 
+			cnfgFile.RemoveObsoleteChildDeviceFiles() 
 			var.Set("UIVersion", HData.UIVersion)
 			-- Sleep for 5 secs, just in case we have multiple plug in copies that try to migrate. They must all have time to finish.
 			luup.sleep(5000)
@@ -3589,7 +3657,7 @@ function Harmony_init(lul_device)
 			cnfgFile.CreateJSONFile('','D_HarmonyDevice',true,{},remicons)
 			log.Log("Rewritten files for main device # %s.",HData.DEVICE)
 			-- Then for any child devices, as they are not yet set, we must look at altid we use.
-			cnfgFile.RemoveObsoleteDeviceFiles()
+			cnfgFile.RemoveObsoleteChildDeviceFiles()
 			local childDeviceIDs = var.Get("PluginHaveChildren")
 			if childDeviceIDs ~= "" then
 				for devNo, deviceID in pairs(luup.devices) do
@@ -3671,10 +3739,19 @@ function Harmony_init(lul_device)
 	if ipAddress == nil then
 		setStatusIcon(HData.Icon.ERROR)
 		SetBusy(false,false)
+		log.DeviceMessage(HData.DEVICE, 2, 0, "No IP address configured.")
 		utils.SetLuupFailure(1, HData.DEVICE)
 		return false, "Configure IP Address.", HData.Description
 	end
-	log.Info("Using Harmony Hub: IP address %s.",ipAddress)
+	-- Set the IP address and connect to Hub.
+	if not Harmony_SetHubIPAddress(ipAddress) then
+		setStatusIcon(HData.Icon.ERROR)
+		SetBusy(false,false)
+		log.DeviceMessage(HData.DEVICE, 2, 0, "Hub connection set-up failed. Check IP Address %s.",ipAddress)
+		utils.SetLuupFailure(2, HData.DEVICE)
+		return false, "Hub connection set-up failed. Check IP Address.", HData.Description
+	end	
+--[[	log.Info("Using Harmony Hub: IP address %s.",ipAddress)
 	-- If starting with polling disabled, no connection is made with the Hub until the first command is send or polling gets enabled again.
 	local poll = (var.GetNumber("HubPolling") == 1)
 	if not Harmony.Initialize(ipAddress, nil, "HH"..HData.DEVICE.."#rboer", poll) then 
@@ -3692,6 +3769,7 @@ function Harmony_init(lul_device)
 			var.Set("FriendlyName", data.friendly_name)	
 		end	
 	end
+]]	
 	-- Register call back handlers for messages from the Hub.
 	Harmony.RegisterCallBack("harmonyengine.metadata?notify", Harmony_CB_MetadataNotify)
 	Harmony.RegisterCallBack("connect.stateDigest?notify", Harmony_CB_StateDigestNotify)
@@ -3700,6 +3778,12 @@ function Harmony_init(lul_device)
 	Harmony.RegisterCallBack("harmony.engine?startActivityFinished", Harmony_CB_StartActivityFinished)
 	Harmony.RegisterCallBack("automation.state?notify", Harmony_CB_AutomationStateNotify)
 	
+	-- See if activities are setup.
+	local buttons = Harmony_GetButtonData(devID, HData.SIDS.MODULE, false)
+	if #buttons == 0 then
+		log.DeviceMessage(HData.DEVICE, 2, 0, "No activities configured.")
+	end	
+
 	--	Schedule to finish rest of start up in a few seconds
 	luup.call_delay("Harmony_Setup", 3, "", false)
 	log.Debug("Harmony Hub Control: init_module completed.")
