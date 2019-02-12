@@ -1,7 +1,11 @@
 //# sourceURL=J_Harmony_UI7.js
 // harmony Hub Control UI for UI7
 // Written by R.Boer. 
-// V3.3 2 February 2019
+// V3.5 11 February 2019
+//
+// V3.5 Changes:
+// 		Removed the HTTP Server as option.
+//		Removed remote images option for openLuup as ALTUI handles images properly.
 //
 // V3.3 Changes:
 //		Added support for automation devices. For now Lamps only.
@@ -74,6 +78,7 @@ var Harmony = (function (api) {
 	var HAM_MAXBUTTONS = 25;
 	var HAM_ERR_MSG = "Error : ";
 	var bOnALTUI = false;
+	var bControllerIsVera = true;
 
 	// Forward declaration.
     var myModule = {};
@@ -89,6 +94,8 @@ var Harmony = (function (api) {
 		// See if we are on ALTUI
 		if (typeof ALTUI_revision=="string") {
 			bOnALTUI = true;
+			var controller = MultiBox.controllerOf(deviceObj.altuiid).controller;
+			bControllerIsVera = !controller.isOpenLuup()
 		}
     }
 	
@@ -102,7 +109,6 @@ var Harmony = (function (api) {
 			var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
 			var logLevel = [{'value':'1','label':'Error'},{'value':'2','label':'Warning'},{'value':'8','label':'Info'},{'value':'11','label':'Debug'}];
 			var actSel = [{ 'value':'','label':'None'}];
-			var ip = !!deviceObj.ip ? deviceObj.ip : '';
 			for (var i=1; i<=HAM_MAXBUTTONS; i++) {
 				var actID = varGet(deviceID,'ActivityID'+i);
 				var actDesc = varGet(deviceID,'ActivityDesc'+i);
@@ -117,10 +123,15 @@ var Harmony = (function (api) {
 			} else {	
 				html +=	htmlAddInput(deviceID, 'Harmony Hub IP Address', 20, 'HubIPAddress') + 
 				htmlAddPulldown(deviceID, 'Ok Acknowledge Interval', 'OkInterval', timeAck)+
-				htmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel)+
-				htmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo)+
-				htmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo)+
-				htmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel)+
+				htmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel);
+//				htmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo);
+				if (bControllerIsVera) {
+					console.log("controller is Vera");
+					html +=	htmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo);
+				} else {
+					console.log("controller is openLuup");
+				}
+				html +=	htmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel)+
 				htmlAddButton(deviceID, 'UpdateSettings');
 			}
 			html += '</div>';
@@ -337,12 +348,17 @@ var Harmony = (function (api) {
 	function _UpdateSettings(deviceID) {
 		// Save variable values so we can access them in LUA without user needing to save
 		showBusy(true);
-		var devicePos = api.getDeviceIndex(deviceID);
+//		var devicePos = api.getDeviceIndex(deviceID);
 		varSet(deviceID,'HubIPAddress',htmlGetElemVal(deviceID, 'HubIPAddress'));
 		varSet(deviceID,'OkInterval',htmlGetElemVal(deviceID, 'OkInterval'));
 		varSet(deviceID,'DefaultActivity',htmlGetPulldownSelection(deviceID, 'DefaultActivity'));
-		varSet(deviceID,'HTTPServer',htmlGetPulldownSelection(deviceID, 'HTTPServer'));
-		varSet(deviceID,'RemoteImages',htmlGetPulldownSelection(deviceID, 'RemoteImages'));
+//		varSet(deviceID,'HTTPServer',htmlGetPulldownSelection(deviceID, 'HTTPServer'));
+		if (bControllerIsVera) {
+			console.log("controller is Vera");
+			varSet(deviceID,'RemoteImages',htmlGetPulldownSelection(deviceID, 'RemoteImages'));
+		} else {
+			console.log("controller is openLuup");
+		}
 		varSet(deviceID,'LogLevel',htmlGetPulldownSelection(deviceID, 'LogLevel'));
 		application.sendCommandSaveUserData(true);
 		setTimeout(function() {
