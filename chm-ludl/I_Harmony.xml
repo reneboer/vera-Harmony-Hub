@@ -71,6 +71,13 @@
     </action>
 	<action>
 		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+		<name>SetRemoteImages</name>
+		<run>
+			Harmony_SetRemoteImages(lul_settings.newImageRemote)
+		</run>
+    </action>
+	<action>
+		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 		<name>SetHubIPAddress</name>
 		<job>
 			Harmony_SetHubIPAddress(lul_settings.newIPAddress, lul_settings.newPort)
