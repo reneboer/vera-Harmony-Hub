@@ -399,7 +399,7 @@ local max_length = 100
 	end
 	
 	local function _devmessage(devID, status, timeout, ...)
-		local message =  prot_format(-1,...)
+		local message =  prot_format(60,...)
 		luup.device_message(devID, status, message, timeout, def_prefix)
 	end
 	
@@ -2031,7 +2031,6 @@ local function Harmony_FindDevice(deviceID)
 	for k, v in pairs(luup.devices) do
 		if var.GetAttribute('id_parent', k) == HData.DEVICE then
 			local dev = var.GetNumber("DeviceID",HData.SIDS.CHILD,k)
-log.Debug("Having child device %s, %s",k,dev)		
 			if dev == deviceID then return k end
 		end
 	end
@@ -2150,24 +2149,39 @@ end
 -- Update the log level.
 function Harmony_SetLogLevel(logLevel)
 	local level = tonumber(logLevel,10) or 10
+	var.Set("LogLevel", level)
 	log.Update(level)
+end
+
+-- Update the Remote Images setting. When changed force a reload.
+function Harmony_SetRemoteImages(remoteImages)
+	local ri = tonumber(remoteImages,10) or 0
+	local remicons = var.GetNumber("RemoteImages")
+	if ri ~= remicons then
+		var.Set("RemoteImages", ri)
+		utils.ReloadLuup()
+	end
 end
 
 -- Update the Hub IP address and then reconnect.
 function Harmony_SetHubIPAddress(ipa, port)
-	local port 
-	local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
-	-- Some cases IP gets stuck in variable and no in attribute (openLuup or ALTUI bug)
+	-- Validate IP address format.
+--	local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
+	ipAddress = ipa
 	if ipAddress == nil then
+		log.Warning("SetHubIPAddress, %s is not a valid IP address.", ipa)
+		log.DeviceMessage(HData.DEVICE, 2, 600, "Hub connection failed. Check IP Address %s",ipa)
 		return nil,nil,500, "Invalid IP Address."
 	end
 	log.Info("Changing Harmony Hub: IP address %s.",ipAddress)
+	var.Set("HubIPAddress",ipAddress)
 	-- If starting with polling disabled, no connection is made with the Hub until the first command is send or polling gets enabled again.
 	local poll = (var.GetNumber("HubPolling") == 1)
 	if not Harmony.Initialize(ipAddress, port, "HH"..HData.DEVICE.."#rboer", poll) then 
+		log.Warning("SetHubIPAddress, unable to reconnect on IP address %s.", ipAddress)
+		log.DeviceMessage(HData.DEVICE, 2, 600, "Hub connection failed. Check IP Address %s",ipa)
 		return nil,nil,500, "Unable to connect to Hub."
 	end
-	var.Set("HubIPAddress",ipAddress)
 	-- Populate details from the Hub V3.0, First startup is never with polling disabled, so should be ok.
 	if poll then
 		local res, data, cde, msg = Harmony.GetHubDetails()
@@ -2177,6 +2191,7 @@ function Harmony_SetHubIPAddress(ipa, port)
 			var.Set("FriendlyName", data.friendly_name)	
 		end	
 	end
+	log.DeviceMessage(HData.DEVICE, 4, 100, " ")
 	return true
 end
 
@@ -3739,7 +3754,7 @@ function Harmony_init(lul_device)
 	if ipAddress == nil then
 		setStatusIcon(HData.Icon.ERROR)
 		SetBusy(false,false)
-		log.DeviceMessage(HData.DEVICE, 2, 0, "No IP address configured.")
+		log.DeviceMessage(HData.DEVICE, 2, 0, "No IP address configured")
 		utils.SetLuupFailure(1, HData.DEVICE)
 		return false, "Configure IP Address.", HData.Description
 	end
@@ -3747,9 +3762,11 @@ function Harmony_init(lul_device)
 	if not Harmony_SetHubIPAddress(ipAddress) then
 		setStatusIcon(HData.Icon.ERROR)
 		SetBusy(false,false)
-		log.DeviceMessage(HData.DEVICE, 2, 0, "Hub connection set-up failed. Check IP Address %s.",ipAddress)
-		utils.SetLuupFailure(2, HData.DEVICE)
-		return false, "Hub connection set-up failed. Check IP Address.", HData.Description
+		log.DeviceMessage(HData.DEVICE, 2, 0, "Hub connection set-up failed. Check IP Address %s",ipAddress)
+--		utils.SetLuupFailure(2, HData.DEVICE)
+--		return false, "Hub connection set-up failed. Check IP Address.", HData.Description
+		utils.SetLuupFailure(0, HData.DEVICE)
+		return true
 	end	
 --[[	log.Info("Using Harmony Hub: IP address %s.",ipAddress)
 	-- If starting with polling disabled, no connection is made with the Hub until the first command is send or polling gets enabled again.

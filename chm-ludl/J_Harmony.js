@@ -1,74 +1,76 @@
 //# sourceURL=J_Harmony.js
-// harmony Hub Control UI
-// Written by R.Boer. 
-// V3.5 12 February 2019
-//
-// V3.5 Changes:
-// 		Removed the HTTP Server as option.
-//		Removed remote images option for openLuup as ALTUI handles images properly.
-//		Default js is now for UI7 and openLuup.
-//
-// V3.3 Changes:
-//		Added support for automation devices. For now Lamps only.
-//
-// V3.0 Changes:
-//		Changed to WebSockets API, no longer need for uid,pwd and polling settings.
-//		Activities, Devices and Commands are now in variable, no need for HTTP handler.
-//
-// V2.22 Changes:
-//		Fix for ALTUI on saving settings.
-//
-// V2.21 Changes:
-//		Suspend Poll when away has added option to only stop when CurrentActivityID is -1 (all off).
-//
-// V2.20 Changes:
-//		Support for Home poll only option.
-//  	Removed syslog support
-//		Nicer look on ALTUI
-//
-// V2.19 Changes:
-//		IP Address is now stored in normal variable, no longer in device IP attribute.
-//
-// V2.16 Changes:
-//		Changed call to request data from Vera Handlers.
-//
-// V2.15 Changes:
-//		New settings option to wait on Hub to fully complete the start of an activity or not.
-//
-// V2.13-1 Changes:
-//		The password input now has the HTML input type password so it won't show.
-// 		Some hints on poll frequency settings.
-//
-// V2.7 Changes:
-//		User can disable plugin. Signal status on control panel.
-//		No more reference to myInterface, using correct api.ui calls instead.
-//
-// V2.5 Changes:
-//		Can define key-press duration for devices.
-//		Some JQuery use. Layout improvements for native UI and ALTUI.
-// 		Changed poll and acknowledge settings to drop down selections.
-//		Proper JSON returns from LUA.
-//
-// V2.4 Changes:
-//		Some optimizations in Vera api calls that now work on UI7
-//
-// V2.1 Changes:
-//		Added selection for time out.
-//
-// V2.02 Changes:
-//		Removed options for MaxActivity and Device Buttons. Now just fixed.
-//		Removed Enable Button Feedback option. Now uses Ok Acknowledge Interval value.
-//		Fixed getInfo and LUA command issue with IE.
-//		Default activity and command descriptions when user does not enter them.
-//		Added Default Activity selection for SetTarget action.
-//		When not specifying a Description, the activity or command will be defaulted.
-// V2.01 Changes:
-//		getInfo query adds device ID for multiple hub support.
-// V2.0 Changes:
-//		Save of variables via luup action as standard save function does not work reliably remote
-// V1.9 changes:
-// 		Corrected serviceId for UpdateDeviceButtons action.
-//		Added syslog support
+/* harmony Hub Control UI
+ Written by R.Boer. 
+ V3.5 12 February 2019
+
+ V3.5 Changes:
+ 		Removed the HTTP Server as option.
+		Removed remote images option for openLuup as ALTUI handles images properly.
+		Default js is now for UI7 and openLuup.
+
+ V3.3 Changes:
+		Added support for automation devices. For now Lamps only.
+
+ V3.0 Changes:
+		Changed to WebSockets API, no longer need for uid,pwd and polling settings.
+		Activities, Devices and Commands are now in variable, no need for HTTP handler.
+
+ V2.22 Changes:
+		Fix for ALTUI on saving settings.
+
+ V2.21 Changes:
+		Suspend Poll when away has added option to only stop when CurrentActivityID is -1 (all off).
+
+ V2.20 Changes:
+		Support for Home poll only option.
+  	Removed syslog support
+		Nicer look on ALTUI
+
+ V2.19 Changes:
+		IP Address is now stored in normal variable, no longer in device IP attribute.
+
+ V2.16 Changes:
+		Changed call to request data from Vera Handlers.
+
+ V2.15 Changes:
+		New settings option to wait on Hub to fully complete the start of an activity or not.
+
+ V2.13-1 Changes:
+		The password input now has the HTML input type password so it won't show.
+ 		Some hints on poll frequency settings.
+
+ V2.7 Changes:
+		User can disable plugin. Signal status on control panel.
+		No more reference to myInterface, using correct api.ui calls instead.
+
+ V2.5 Changes:
+		Can define key-press duration for devices.
+		Some JQuery use. Layout improvements for native UI and ALTUI.
+ 		Changed poll and acknowledge settings to drop down selections.
+		Proper JSON returns from LUA.
+
+ V2.4 Changes:
+		Some optimizations in Vera api calls that now work on UI7
+
+ V2.1 Changes:
+		Added selection for time out.
+
+ V2.02 Changes:
+		Removed options for MaxActivity and Device Buttons. Now just fixed.
+		Removed Enable Button Feedback option. Now uses Ok Acknowledge Interval value.
+		Fixed getInfo and LUA command issue with IE.
+		Default activity and command descriptions when user does not enter them.
+		Added Default Activity selection for SetTarget action.
+		When not specifying a Description, the activity or command will be defaulted.
+ V2.01 Changes:
+		getInfo query adds device ID for multiple hub support.
+ V2.0 Changes:
+		Save of variables via luup action as standard save function does not work reliably remote
+ V1.9 changes:
+ 		Corrected serviceId for UpdateDeviceButtons action.
+		Added syslog support
+*/
+
 var Harmony = (function (api) {
 
 	// Constants. Keep in sync with LUA code.
@@ -79,10 +81,28 @@ var Harmony = (function (api) {
 	var HAM_MAXBUTTONS = 25;
 	var HAM_ERR_MSG = "Error : ";
 	var bOnALTUI = false;
-	var bControllerIsVera = true;
+	var bControllerIsVera;
 
 	// Forward declaration.
     var myModule = {};
+	
+	// Check the controller we are talking to. Return true if it is Vera.
+	function getTargetControllerType(deviceObj) {
+		if (typeof(bControllerIsVera) === 'undefined') {
+			var bCtv = true;
+			if (bOnALTUI) {
+				var udObj = api.getUserData();	
+				// We are running on openLuup locally, see if the top level device is zero; I.e. local.
+				if (udObj.BuildVersion === '*1.7.0*' && deviceObj.id_parent != 0) {
+					// Not local, ask VeraBridge handing the device what it is talking to. Only latest version has RemotePort that can be for other OpenLuup.
+					var vp = varGet(deviceObj.id_parent,'RemotePort',VB_SID);
+					bCtv = Boolean(vp !== ':3480');
+				}
+			}
+			bControllerIsVera = bCtv;
+		} 
+		return bControllerIsVera;
+	}
 
     function _onBeforeCpanelClose(args) {
 		showBusy(false);
@@ -120,27 +140,16 @@ var Harmony = (function (api) {
 			if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
 				html += '<br>Plugin is disabled in Attributes.';
 			} else {
-				if (bOnALTUI) {
-					var udObj = api.getUserData();	
-					// We are running on openLuup locally, for now we assume if bridged then it is a Vera.
-//					bControllerIsVera = !(Boolean((udObj.BuildVersion === "*1.7.0*") && (deviceObj.id_parent == 0)));
-					if (udObj.BuildVersion === '*1.7.0*' && deviceObj.id_parent != 0) {
-						var vp = varGet(deviceObj.id_parent,'RemotePort',VB_SID);
-						bControllerIsVera = Boolean(vp !== ':3480');
-					}
-// always gives local controller, looking for bridged.
-//					var ctrnum = MultiBox.controllerOf(deviceObj.altuiid).controller;
-//					bControllerIsVera = !MultiBox.getControllers()[ctrnum].controller.isOpenLuup();
-				}	
-				html +=	htmlAddInput(deviceID, 'Harmony Hub IP Address', 20, 'HubIPAddress') + 
-				htmlAddPulldown(deviceID, 'Ok Acknowledge Interval', 'OkInterval', timeAck)+
-				htmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel);
-//				htmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo);
-				if (bControllerIsVera) {
-					html +=	htmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo);
+				html +=	htmlAddInput(deviceID, 'Harmony Hub IP Address', 20, 'HubIPAddress','UpdateSettingsCB') + 
+				htmlAddPulldown(deviceID, 'Ok Acknowledge Interval', 'OkInterval', timeAck,'UpdateSettingsCB')+
+				htmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel,'UpdateSettingsCB');
+				if (getTargetControllerType(deviceObj)) {
+					html +=	htmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo,'UpdateSettingsCB');
 				}
-				html +=	htmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel)+
-				htmlAddButton(deviceID, 'UpdateSettings');
+				html +=	htmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel,'UpdateSettingsCB');
+//				if (bControllerIsVera) {
+//					html +=	htmlAddButton(deviceID, 'UpdateSettings');
+//				}	
 			}
 			html += '</div>';
 			api.setCpanelContent(html);
@@ -148,6 +157,45 @@ var Harmony = (function (api) {
             Utils.logError('Error in Harmony.Settings(): ' + e);
         }
 	}
+	
+	// Call back on settings change
+	function _UpdateSettingsCB(deviceID,varID) {
+		showBusy(true);
+		var notifyMsg = "";
+		var val = htmlGetElemVal(deviceID, varID);
+		switch (varID) {
+		case 'HubIPAddress':
+			api.performLuActionOnDevice(deviceID, HAM_SID, 'SetHubIPAddress',  { actionArguments: { newIPAddress: ''+val }});
+			break;
+		case 'OkInterval':
+			varSet(deviceID,'OkInterval',val);
+			break;
+		case 'DefaultActivity':
+			varSet(deviceID,'DefaultActivity',val);
+			break;
+		case 'RemoteImages':
+			api.performLuActionOnDevice(deviceID, HAM_SID, 'SetRemoteImages',  { actionArguments: { newImageRemote: val }});
+			notifyMsg = "Setting updated and Vera reload in progress. Refresh your browser when done.";
+			break;
+		case 'LogLevel':
+			api.performLuActionOnDevice(deviceID, HAM_SID, 'SetLogLevel',  { actionArguments: { newLogLevel: val }});
+			break;
+		}
+		if (notifyMsg !== "") {
+			setTimeout(function() {
+				showBusy(false);
+				try {
+					api.ui.showMessagePopup(notifyMsg,0);
+				}
+				catch (e) {
+					myInterface.showMessagePopup(notifyMsg,0); // ALTUI
+				}
+			}, 3000);	
+		} else {
+			showBusy(false);
+		}
+	}
+
 
 	// Request HTML for activities tab
 	function _Activities() {
@@ -174,9 +222,11 @@ var Harmony = (function (api) {
 					html += '<b>Activity mappings</b>'+
 						htmlAddButton(deviceID,'UpdateButtons')+
 						'<div id="ham_msg">Select activities you want to be able to control and click Save Changes.<br>'+
-						'The labels should fit a button, normally 7 or 8 characters max.<br>'+
-						'A reload command may be performed automatically.</div>'+
-						'<p>';
+						'The labels should fit a button, normally 7 or 8 characters max.';
+					if (getTargetControllerType(deviceObj)) {
+						html += '<br>A reload command may be performed automatically.';
+					}	
+					html += '</div><p>';
 					for (i=1; i<=HAM_MAXBUTTONS; i++) {
 						html += htmlAddMapping(deviceID, 'Button '+i+'&nbsp;&nbsp;Activity ID','ActivityID'+i,actSel,'Label','ActivityDesc'+i);
 					}
@@ -292,47 +342,6 @@ var Harmony = (function (api) {
         }
 	}
 
-	// Build HTML for child device settings tab
-	function _DeviceSettingsHandler(deviceID, result) {
-		try {
-			// We should have received a JSON object.
-			var html = '';
-			if (typeof result=="object") {
-				if (result.code==200) {
-					var actSel = [{ 'value':'','label':'None'}];
-					var funcs = result.data.Functions
-					for (var i=0; i<funcs.length; i++) {
-						for (var j=0; j<funcs[i].Commands.length; j++) {
-							actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
-						}	
-					}
-					html += '<b>Device Command mappings</b>'+
-						htmlAddButton(deviceID,'UpdateDeviceButtons')+
-						'<div id="ham_msg">Select commands you want to be able to control and click Save Changes.<br>'+
-						'The labels should fit a button, normally 7 or 8 characters max.<br>'+
-						'A reload command may be performed automatically.</div>'+
-						'<p>';
-					for (i=1; i<=HAM_MAXBUTTONS; i++) {
-						html += htmlAddMapping(deviceID, 'Button '+i+' Command','Command'+i,actSel,'Label','CommandDesc'+i, HAM_CHSID);
-					}
-				} else {
-					html += "Error occurred: "+result.msg;
-				}	
-			} else {
-				// Report failure to user
-				if (typeof result=="string") {
-					html = result;
-				} else {
-					html = "Unknown error occurred. Try again in a minute.";
-				}
-			}
-			$("#hamID_content_DS_"+deviceID).html(html);
-		} catch (e) {
-            Utils.logError('Error in Harmony.DeviceSettingsHandler(): ' + e);
-        }
-		showBusy(false);
-	}
-
 	// Update variable in user_data and lu_status
 	function varSet(deviceID, varID, varVal, sid) {
 		if (typeof(sid) == 'undefined') { sid = HAM_SID; }
@@ -353,30 +362,6 @@ var Harmony = (function (api) {
         }
 	}
 
-	function _UpdateSettings(deviceID) {
-		// Save variable values so we can access them in LUA without user needing to save
-		showBusy(true);
-//		var devicePos = api.getDeviceIndex(deviceID);
-		varSet(deviceID,'HubIPAddress',htmlGetElemVal(deviceID, 'HubIPAddress'));
-		varSet(deviceID,'OkInterval',htmlGetElemVal(deviceID, 'OkInterval'));
-		varSet(deviceID,'DefaultActivity',htmlGetPulldownSelection(deviceID, 'DefaultActivity'));
-//		varSet(deviceID,'HTTPServer',htmlGetPulldownSelection(deviceID, 'HTTPServer'));
-		if (bControllerIsVera) {
-			varSet(deviceID,'RemoteImages',htmlGetPulldownSelection(deviceID, 'RemoteImages'));
-		}
-		varSet(deviceID,'LogLevel',htmlGetPulldownSelection(deviceID, 'LogLevel'));
-		application.sendCommandSaveUserData(true);
-		setTimeout(function() {
-			doReload(deviceID);
-			showBusy(false);
-			try {
-				api.ui.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0);
-			}
-			catch (e) {
-				myInterface.showMessagePopup(Utils.getLangString("ui7_device_cpanel_details_saved_success","Device details saved successfully."),0); // ALTUI
-			}
-		}, 3000);	
-	}
 	// Update the buttons for the main device.
 	function _UpdateButtons(deviceID) {
 		// Save variable values so we can access them in LUA without user needing to save
@@ -406,10 +391,17 @@ var Harmony = (function (api) {
 		if (bChanged) {
 			application.sendCommandSaveUserData(true);
 			api.performLuActionOnDevice(deviceID, HAM_SID, 'UpdateButtons', {});
-			setTimeout(function() {
+			var deviceObj = api.getDeviceObject(deviceID);
+			if (getTargetControllerType(deviceObj)) {
+				// Vera requires static JSON rewrite and reload.
+				setTimeout(function() {
+					showBusy(false);
+					htmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!",false);
+				}, 3000);	
+			} else {
 				showBusy(false);
-				htmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!",false);
-			}, 3000);	
+				htmlSetMessage("Changes to the buttons made.<br>Refresh your browser page!",false);
+			}
 		} else {
 			showBusy(false);
 			htmlSetMessage("You have not changed any values.<br>No changes to the buttons made.",true);
@@ -452,10 +444,16 @@ var Harmony = (function (api) {
 			// Wait a second to send the actual action, as it may have issues not saving all data on time.
 			application.sendCommandSaveUserData(true);
 			api.performLuActionOnDevice(deviceID, HAM_CHSID, 'UpdateDeviceButtons', {});
-			setTimeout(function() {
+			if (getTargetControllerType(deviceObj)) {
+				// Vera requires static JSON rewrite and reload.
+				setTimeout(function() {
+					showBusy(false);
+					htmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!",false);
+				}, 3000);	
+			} else {
 				showBusy(false);
-				htmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!",false);
-			}, 3000);	
+				htmlSetMessage("Changes to the buttons made.<br>Refresh your browser page!",false);
+			}
 		} else {
 			showBusy(false);
 			htmlSetMessage("You have not made any changes.<br>No changes to the buttons made.",true);
@@ -489,7 +487,7 @@ var Harmony = (function (api) {
 			application.sendCommandSaveUserData(true);
 			setTimeout(function() {
 				doReload(deviceID);
-				htmlSetMessage("Changes to configuration made.<br>Now wait for reload to complete and then refresh your browser page!",false);
+				htmlSetMessage("Changes to configuration made.<br>Now wait for reload to complete and then refresh your browser page!<p>New device(s) will be in the No Room section.",false);
 				showBusy(false);
 			}, 3000);	
 		} else {
@@ -527,21 +525,6 @@ var Harmony = (function (api) {
 		catch (e) {	
 			$("#ham_msg").html(msg+'<br>&nbsp;');
 		}	
-	}
-	function htmlSetLoadMessage(deviceID,typ,msg,disabled) {
-		var html = '<div class="deviceCpanelSettingsPage">'+
-			'<h3>Device #'+deviceID+'&nbsp;&nbsp;&nbsp;'+api.getDisplayedDeviceName(deviceID)+'</h3>';
-		html += '<div id="hamID_content_'+typ+'_'+deviceID+'">'+
-			'<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
-			'<tr><td>&nbsp;</td></tr>'+
-			'<tr><td>'+msg+'</td></tr>'+
-			'<tr><td>&nbsp;</td></tr>';
-		if (disabled !== true) {	
-			'<tr><td align="center">Please wait...</td></tr>';
-		}	
-		html += '</table></div></div>';
-		api.setCpanelContent(html);
-		showBusy(true);
 	}
 
 	// Add label, pulldown, label, input
@@ -582,13 +565,14 @@ var Harmony = (function (api) {
 	}
 
 	// Add a label and pulldown selection
-	function htmlAddPulldown(di, lb, vr, values) {
+	function htmlAddPulldown(di, lb, vr, values, cb) {
 		try {
 			var selVal = varGet(di, vr);
+			var onch = (typeof cb != 'undefined') ? ' onchange=Harmony.'+cb+'(\''+di+'\',\''+vr+'\'); ' : ' ';
 			var html = '<div class="clearfix labelInputContainer">'+
 				'<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="width:280px;">'+lb+'</div>'+
 				'<div class="pull-left customSelectBoxContainer">'+
-				'<select id="hamID_'+vr+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:200px;">';
+				'<select '+onch+'id="hamID_'+vr+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:200px;">';
 			for(var i=0;i<values.length;i++){
 				html += '<option value="'+values[i].value+'" '+((values[i].value==selVal)?'selected':'')+'>'+values[i].label+'</option>';
 			}
@@ -601,9 +585,10 @@ var Harmony = (function (api) {
 		}
 	}
 	// Add a label and multiple selection
-	function htmlAddPulldownMultiple(di, lb, vr, values) {
+	function htmlAddPulldownMultiple(di, lb, vr, values, cb) {
 		try {
 			var selVal = varGet(di, vr);
+			var onch = (typeof cb != 'undefined') ? ' onchange=Harmony.'+cb+'(\''+di+'\',\''+vr+'\'); ' : ' ';
 			var selected = [];
 			if (selVal !== '') {
 				selected = selVal.split(',');
@@ -629,15 +614,18 @@ var Harmony = (function (api) {
 	}
 
 	// Add a standard input for a plug-in variable.
-	function htmlAddInput(di, lb, si, vr, sid, df) {
+	function htmlAddInput(di, lb, si, vr, cb, sid, df) {
 		var val = (typeof df != 'undefined') ? df : varGet(di,vr,sid);
-		var typ = (vr.toLowerCase() == 'password') ? 'type="password"' : 'type="text"';
+		var onch = (typeof cb != 'undefined') ? ' onchange=Harmony.'+cb+'(\''+di+'\',\''+vr+'\'); ' : ' ';
+//		var typ = (vr.toLowerCase() == 'password') ? 'type="password"' : 'type="text"';
+		var typ = 'type="text"';
 		var html = '<div class="clearfix labelInputContainer">'+
 					'<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="width:280px;">'+lb+'</div>'+
 					'<div class="pull-left">'+
-						'<input class="customInput '+((bOnALTUI) ? 'altui-ui-input form-control form-control-sm' : '')+'" style="width:200px;" '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'">'+
+						'<input class="customInput '+((bOnALTUI) ? 'altui-ui-input form-control form-control-sm' : '')+'" '+onch+'style="width:200px;" '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'">'+
 					'</div>'+
 				   '</div>';
+/* pwd support no longer needed for WebSocket API.
 		if (vr.toLowerCase() == 'password') {
 			html += '<div class="clearfix labelInputContainer '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'">'+
 					'<div class="pull-left inputLabel" style="width:280px;">&nbsp; </div>'+
@@ -653,6 +641,7 @@ var Harmony = (function (api) {
 					'});'+
 					'</script>';
 		}
+*/		
 		return html;
 	}
 	// Add a Save Settings button
@@ -690,7 +679,7 @@ var Harmony = (function (api) {
         uuid: _uuid,
         init: _init,
         onBeforeCpanelClose: _onBeforeCpanelClose,
-		UpdateSettings: _UpdateSettings,
+		UpdateSettingsCB: _UpdateSettingsCB,
 		UpdateButtons: _UpdateButtons,
 		UpdateDeviceButtons: _UpdateDeviceButtons,
 		UpdateDeviceSelections: _UpdateDeviceSelections,
