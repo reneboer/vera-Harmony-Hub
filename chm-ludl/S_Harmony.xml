@@ -35,6 +35,10 @@
       <dataType>ui1</dataType>
     </stateVariable>
 	<stateVariable sendEvents="no">
+      <name>RemoteImages</name>
+      <dataType>ui1</dataType>
+    </stateVariable>
+	<stateVariable sendEvents="no">
       <name>Channel</name>
       <dataType>ui4</dataType>
     </stateVariable>
@@ -148,6 +152,16 @@
 				<name>newLogLevel</name>
 				<direction>in</direction>
 				<relatedStateVariable>LogLevel</relatedStateVariable>
+			</argument>
+		</argumentList>
+    </action>
+    <action>
+		<name>SetRemoteImages</name>
+		<argumentList>
+			<argument>
+				<name>newImageRemote</name>
+				<direction>in</direction>
+				<relatedStateVariable>RemoteImages</relatedStateVariable>
 			</argument>
 		</argumentList>
     </action>
