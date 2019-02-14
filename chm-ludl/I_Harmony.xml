@@ -7,191 +7,191 @@
 		<protocol>crlf</protocol>
 	</settings>
 	<files>L_Harmony.lua</files>
-    <incoming>
+	<incoming>
 		<lua>Harmony_Incoming(lul_data)</lua>
-    </incoming>
+	</incoming>
 	<startup>Harmony_init</startup>
 	<actionList>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>ForceUpdateConfiguration</name>
-		<job>
-			Harmony_UpdateConfigurations()
-			return 4,nil
-		</job>
-		<jobname>StartActivity</jobname>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>PowerOff</name>
-		<job>
-			Harmony_PowerOff()
-			return 4,nil
-		</job>
-		<jobname>StartActivity</jobname>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>StartActivity</name>
-		<job>
-			Harmony_StartActivity(lul_settings.newActivityID or "")
-			return 4,nil
-		</job>
-		<jobname>StartActivity</jobname>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>ChangeChannel</name>
-		<job>
-			Harmony_ChangeChannel(lul_settings.newChannel or "")
-			return 4,nil
-		</job>
-		<jobname>StartActivity</jobname>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>GetCurrentActivityID</name>
-		<run>
-			Harmony_GetCurrentActivtyID()
-		</run>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>SetHubPolling</name>
-		<run>
-			Harmony_SetHubPolling(lul_settings.newPollFlag or "0")
-		</run>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>SetLogLevel</name>
-		<run>
-			Harmony_SetLogLevel(lul_settings.newLogLevel or "10")
-		</run>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>SetRemoteImages</name>
-		<run>
-			Harmony_SetRemoteImages(lul_settings.newImageRemote)
-		</run>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>FindActivityByName</name>
-		<run>
-			Harmony_FindActivityByName(lul_settings.ActivityName or "")
-		</run>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>FindActivityByID</name>
-		<run>
-			Harmony_FindActivityByID(lul_settings.ActivityID or "0")
-		</run>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>FindDeviceByName</name>
-		<run>
-			Harmony_FindDeviceByName(lul_settings.DeviceName or "")
-		</run>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>FindDeviceByID</name>
-		<run>
-			Harmony_FindDeviceyByID(lul_settings.DeviceID or "0")
-		</run>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>UpdateButtons</name>
-		<job>
-			Harmony_UpdateButtons(lul_device)
-			return 4,nil
-		</job>
-		<jobname>UpdateButtons</jobname>
-    </action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
-		<name>IssueDeviceCommand</name>
-		<job>
-			Harmony_IssueDeviceCommand(lul_settings.DeviceID or "", lul_settings.Command or "", lul_settings.Duration or "0")
-			return 4,nil
-		</job>
-		<jobname>IssueDeviceCommand</jobname>
-	</action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
-		<name>UpdateDeviceButtons</name>
-		<job>
-			Harmony_UpdateDeviceButtons(lul_device)
-			return 4,nil
-		</job>
-		<jobname>UpdateDeviceButtons</jobname>
-	</action>
-	<action>
-		<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
-		<name>SendDeviceCommand</name>
-		<job>
-			Harmony_SendDeviceCommand(lul_device,lul_settings.Command or "",lul_settings.Duration or "0")
-			return 4,nil
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>ForceUpdateConfiguration</name>
+			<job>
+				Harmony_UpdateConfigurations()
+				return 4,nil
 			</job>
-		<jobname>SendDeviceCommand</jobname>
-	</action>
-	<action>
-        <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
-		<name>SetTarget</name>
-		<job>
-			local newTarget = lul_settings.newTargetValue or ""
-			-- See if we are on parent, or Lamp child
-			if lul_device == HData.DEVICE then
-				local curTarget = var.Get("Target", HData.SIDS.SP)
-				if (newTarget ~= curTarget) then
-					if (newTarget == '1') then 
-						local newActivityID = var.Get('DefaultActivity') 
-						if (newActivityID ~= '') then 
-							Harmony_StartActivity(newActivityID)
-						end	
-					else 
-						Harmony_PowerOff()
+			<jobname>StartActivity</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>PowerOff</name>
+			<job>
+				Harmony_PowerOff()
+				return 4,nil
+			</job>
+			<jobname>StartActivity</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>StartActivity</name>
+			<job>
+				Harmony_StartActivity(lul_settings.newActivityID or "")
+				return 4,nil
+			</job>
+			<jobname>StartActivity</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>ChangeChannel</name>
+			<job>
+				Harmony_ChangeChannel(lul_settings.newChannel or "")
+				return 4,nil
+			</job>
+			<jobname>StartActivity</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>GetCurrentActivityID</name>
+			<run>
+				Harmony_GetCurrentActivtyID()
+			</run>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>SetHubPolling</name>
+			<run>
+				Harmony_SetHubPolling(lul_settings.newPollFlag or "0")
+			</run>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>SetLogLevel</name>
+			<run>
+				Harmony_SetLogLevel(lul_settings.newLogLevel or "10")
+			</run>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>SetRemoteImages</name>
+			<run>
+				Harmony_SetRemoteImages(lul_settings.newImageRemote)
+			</run>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>FindActivityByName</name>
+			<run>
+				Harmony_FindActivityByName(lul_settings.ActivityName or "")
+			</run>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>FindActivityByID</name>
+			<run>
+				Harmony_FindActivityByID(lul_settings.ActivityID or "0")
+			</run>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>FindDeviceByName</name>
+			<run>
+				Harmony_FindDeviceByName(lul_settings.DeviceName or "")
+			</run>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>FindDeviceByID</name>
+			<run>
+				Harmony_FindDeviceyByID(lul_settings.DeviceID or "0")
+			</run>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>UpdateButtons</name>
+			<job>
+				Harmony_UpdateButtons(lul_device)
+				return 4,nil
+			</job>
+			<jobname>UpdateButtons</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>IssueDeviceCommand</name>
+			<job>
+				Harmony_IssueDeviceCommand(lul_settings.DeviceID or "", lul_settings.Command or "", lul_settings.Duration or "0")
+				return 4,nil
+			</job>
+			<jobname>IssueDeviceCommand</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
+			<name>UpdateDeviceButtons</name>
+			<job>
+				Harmony_UpdateDeviceButtons(lul_device)
+				return 4,nil
+			</job>
+			<jobname>UpdateDeviceButtons</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
+			<name>SendDeviceCommand</name>
+			<job>
+				Harmony_SendDeviceCommand(lul_device,lul_settings.Command or "",lul_settings.Duration or "0")
+				return 4,nil
+				</job>
+			<jobname>SendDeviceCommand</jobname>
+		</action>
+		<action>
+			<serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
+			<name>SetTarget</name>
+			<job>
+				local newTarget = lul_settings.newTargetValue or ""
+				-- See if we are on parent, or Lamp child
+				if lul_device == HData.DEVICE then
+					local curTarget = var.Get("Target", HData.SIDS.SP)
+					if (newTarget ~= curTarget) then
+						if (newTarget == '1') then 
+							local newActivityID = var.Get('DefaultActivity') 
+							if (newActivityID ~= '') then 
+								Harmony_StartActivity(newActivityID)
+							end	
+						else 
+							Harmony_PowerOff()
+						end
 					end
-				end
-			else
-				-- It is a child device. Must be a lamp
-				Harmony_LampSetTarget(lul_device,newTarget)
-			end	
-			return 4,nil
-		</job>
-		<jobname>SetTarget</jobname>
-	</action>
-	<action>
-		<serviceId>urn:upnp-org:serviceId:Dimming1</serviceId>
-		<name>SetLoadLevelTarget</name>
-		<job>
-			Harmony_LampSetLoadLevelTarget(lul_device,lul_settings.newLoadlevelTarget)
-			return 4,nil
-		</job>
-		<jobname>SetLoadLevelTarget</jobname>
-	</action>
-	<action>
-		<serviceId>urn:micasaverde-com:serviceId:Color1</serviceId>
-		<name>SetColorRGB</name>
-		<job>
-			Harmony_LampSetColorRGB(lul_device,lul_settings.newColorRGBTarget)
-			return 4,nil
-		</job>
-		<jobname>SetColorRGB</jobname>
-	</action>
-	<action>
-		<serviceId>urn:micasaverde-com:serviceId:Color1</serviceId>
-		<name>SetColor</name>
-		<job>
-			Harmony_LampSetColor(lul_device,lul_settings.newColorTarget)
-			return 4,nil
-		</job>
-		<jobname>SetColor</jobname>
-	</action>
-  </actionList>
+				else
+					-- It is a child device. Must be a lamp
+					Harmony_LampSetTarget(lul_device,newTarget)
+				end	
+				return 4,nil
+			</job>
+			<jobname>SetTarget</jobname>
+		</action>
+		<action>
+			<serviceId>urn:upnp-org:serviceId:Dimming1</serviceId>
+			<name>SetLoadLevelTarget</name>
+			<job>
+				Harmony_LampSetLoadLevelTarget(lul_device,lul_settings.newLoadlevelTarget)
+				return 4,nil
+			</job>
+			<jobname>SetLoadLevelTarget</jobname>
+		</action>
+		<action>
+			<serviceId>urn:micasaverde-com:serviceId:Color1</serviceId>
+			<name>SetColorRGB</name>
+			<job>
+				Harmony_LampSetColorRGB(lul_device,lul_settings.newColorRGBTarget)
+				return 4,nil
+			</job>
+			<jobname>SetColorRGB</jobname>
+		</action>
+		<action>
+			<serviceId>urn:micasaverde-com:serviceId:Color1</serviceId>
+			<name>SetColor</name>
+			<job>
+				Harmony_LampSetColor(lul_device,lul_settings.newColorTarget)
+				return 4,nil
+			</job>
+			<jobname>SetColor</jobname>
+		</action>
+	</actionList>
 </implementation>
