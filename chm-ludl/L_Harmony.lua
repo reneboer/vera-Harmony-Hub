@@ -2,7 +2,7 @@
 	Module L_Harmony1.lua
 	
 	Written by R.Boer. 
-	V3.5 12 February 2019
+	V3.5 14 February 2019
 				to-do, add media player (Sonos) functions (V3.x).
 	
 	V3.5 Changes:
@@ -12,8 +12,8 @@
 				Fix for restarting while HubPolling is disabled. We can now restart with Hub off.
 				HTTP handler is now enabled by default.
 				J_Harmony.js is now for UI7 and openLuup. J_Harmony_UI5.js for old systems.
-				(to do) add action to change log level without reload
-				(to do) add action to change IP address without reload.
+				Added action to change log level without reload
+				Added action to change Remote Images settings in LUA.
 				Some more ConfigFilesAPI rewrites.
 				Better screen message handling incase of errors or incomplete configurations.
 	V3.4 Changes:
@@ -210,16 +210,6 @@ local HData = { -- Data used by Harmony Plugin
 				["LWB006"] = 9
 				} -- Wattage for known models, so we can report approx. energy usage. Used to default UserSuppliedWattage.
 }
---[[
-local TaskData = {
-	Description = "Harmony Control",
-	taskHandle = -1,
-	ERROR = 2,
-	ERROR_PERM = -2,
-	SUCCESS = 4,
-	BUSY = 1
-}
-]]
 
 -- LUA Job Status. Use for handlers
 local JobStatus = {
@@ -321,6 +311,8 @@ local def_prefix = ''
 local def_debug = false
 local def_file = false
 local max_length = 100
+local onOpenLuup = false
+local taskHandle = -1
 
 	local function _update(level)
 		if level > 100 then
@@ -338,9 +330,10 @@ local max_length = 100
 		end
 	end	
 
-	local function _init(prefix, level)
+	local function _init(prefix, level,onol)
 		_update(level)
 		def_prefix = prefix
+		onOpenLuup = onol
 	end	
 	
 	-- Build loggin string safely up to given lenght. If only one string given, then do not format because of length limitations.
@@ -398,10 +391,28 @@ local max_length = 100
 		end	
 	end
 	
-	local function _devmessage(devID, status, timeout, ...)
+	local function _devmessage(devID, isError, timeout, ...)
 		local message =  prot_format(60,...)
-		luup.device_message(devID, status, message, timeout, def_prefix)
+		local status = isError and 2 or 4
+		-- Standard device message cannot be erased. Need to do a reload if message w/o timeout need to be removed. Rely on caller to trigger that.
+		if onOpenLuup then
+			taskHandle = luup.task(message, status, def_prefix, taskHandle)
+			if timeout ~= 0 then
+				luup.call_delay("logAPI_clearTask", timeout, "", false)
+			else
+				taskHandle = -1
+			end
+		else
+			luup.device_message(devID, status, message, timeout, def_prefix)
+		end	
 	end
+	
+	local function logAPI_clearTask()
+		luup.task("", 4, def_prefix, taskHandle)
+		taskHandle = -1
+	end
+	_G.logAPI_clearTask = logAPI_clearTask
+	
 	
 	return {
 		Initialize = _init,
@@ -1958,20 +1969,6 @@ end
 ---------------------------------------------------------------------------------------------
 -- Harmony Plugin functions
 ---------------------------------------------------------------------------------------------
---[[ Set message in task window.
-local function task(text, mode) 
-	local mode = mode or TaskData.ERROR 
-	if (mode ~= TaskData.SUCCESS) then 
-		if (mode == TaskData.ERROR_PERM) then
-			log.Error("task: %s.",(text or "no text")) 
-		else	
-			log.Log("task: %s.",(text or "no text")) 
-		end 
-	end 
-	TaskData.taskHandle = luup.task(text, (mode == TaskData.ERROR_PERM) and TaskData.ERROR or mode, TaskData.Description, TaskData.taskHandle) 
-end 
-]]
-
 -- Check how much memory the plugin uses, and see if we should start/stop polling
 function checkMemory()
 	luup.call_delay("checkMemory", 600)
@@ -2159,42 +2156,11 @@ function Harmony_SetRemoteImages(remoteImages)
 	local remicons = var.GetNumber("RemoteImages")
 	if ri ~= remicons then
 		var.Set("RemoteImages", ri)
+		var.Set("LinkStatus","Restarting...")
+		Harmony.Close()
 		utils.ReloadLuup()
 	end
 end
-
--- Update the Hub IP address and then reconnect.
-function Harmony_SetHubIPAddress(ipa, port)
-	-- Validate IP address format.
---	local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
-	ipAddress = ipa
-	if ipAddress == nil then
-		log.Warning("SetHubIPAddress, %s is not a valid IP address.", ipa)
-		log.DeviceMessage(HData.DEVICE, 2, 600, "Hub connection failed. Check IP Address %s",ipa)
-		return nil,nil,500, "Invalid IP Address."
-	end
-	log.Info("Changing Harmony Hub: IP address %s.",ipAddress)
-	var.Set("HubIPAddress",ipAddress)
-	-- If starting with polling disabled, no connection is made with the Hub until the first command is send or polling gets enabled again.
-	local poll = (var.GetNumber("HubPolling") == 1)
-	if not Harmony.Initialize(ipAddress, port, "HH"..HData.DEVICE.."#rboer", poll) then 
-		log.Warning("SetHubIPAddress, unable to reconnect on IP address %s.", ipAddress)
-		log.DeviceMessage(HData.DEVICE, 2, 600, "Hub connection failed. Check IP Address %s",ipa)
-		return nil,nil,500, "Unable to connect to Hub."
-	end
-	-- Populate details from the Hub V3.0, First startup is never with polling disabled, so should be ok.
-	if poll then
-		local res, data, cde, msg = Harmony.GetHubDetails()
-		if res then
-			var.Set("RemoteID", data.remote_id)	
-			var.Set("AccountID", data.account_id)	
-			var.Set("FriendlyName", data.friendly_name)	
-		end	
-	end
-	log.DeviceMessage(HData.DEVICE, 4, 100, " ")
-	return true
-end
-
 
 -- Update the polling flag. If called with "1" then the connection with the Hub will be kept open, else it will close after each command.
 -- If Polling is on and turned off, wait for the hub to be off (current activity == -1)
@@ -3006,7 +2972,7 @@ end
 -- Input: devID = device ID
 function Harmony_UpdateButtons(devID, upgrade)
 	log.Debug('Updating buttons for Harmony device %s.',devID)
-	if utils.GetUI() == utils.IsOpenLuup then 
+	if HData.onOpenLuup then 
 		-- Not required for openLuup as static JSON definitions not used.
 		log.Debug('UpdateButtons called for OpenLuup and is not required. Aborting..')
 		return true
@@ -3050,7 +3016,7 @@ end
 -- Input: devID = device ID
 function Harmony_UpdateDeviceButtons(devID, upgrade)
 	local upgrd
-	if utils.GetUI() == utils.IsOpenLuup then 
+	if HData.onOpenLuup then
 		-- Not required for openLuup as static JSON definitions not used.
 		log.Debug('UpdateDeviceButtons called for OpenLuup and is not required. Aborting..')
 		return true
@@ -3295,7 +3261,9 @@ local function Harmony_CreateChildren()
 				local buttons = Harmony_GetButtonData(chdev, HData.SIDS.CHILD, true)
 				if #buttons == 0 then
 					log.Debug("No Commands configured. Put up message.")
-					log.DeviceMessage(chdev, 2, 0, "No Commands configured.")
+					if not HData.onOpenLuup then
+						log.DeviceMessage(chdev, true, 0, "No Commands configured.")
+					end	
 				end	
 			end
 		end
@@ -3507,6 +3475,7 @@ function Harmony_Setup()
 	-- If debug level, keep tap on memory usage too.
 	--checkMemory()
 	setStatusIcon(HData.Icon.IDLE)
+	var.Set("LinkStatus","Ok")
 	return true
 end
 
@@ -3527,6 +3496,7 @@ function Harmony_init(lul_device)
 	utils.Initialize()
 
 	SetBusy(true,false)
+	var.Set("LinkStatus","Starting...")
 	setStatusIcon(HData.Icon.WAIT)
 	log.Log("Harmony device #%s is initializing!",HData.DEVICE)
 	-- See if we are running on openLuup.
@@ -3750,33 +3720,25 @@ function Harmony_init(lul_device)
 	-- Check that we have to parameters to get started
 	local ipa =	var.Default("HubIPAddress","")
 	local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
-	-- Some cases IP gets stuck in variable and no in attribute (openLuup or ALTUI bug)
+	-- Set the IP address and connect to Hub.
 	if ipAddress == nil then
 		setStatusIcon(HData.Icon.ERROR)
-		SetBusy(false,false)
-		log.DeviceMessage(HData.DEVICE, 2, 0, "No IP address configured")
-		utils.SetLuupFailure(1, HData.DEVICE)
-		return false, "Configure IP Address.", HData.Description
-	end
-	-- Set the IP address and connect to Hub.
-	if not Harmony_SetHubIPAddress(ipAddress) then
-		setStatusIcon(HData.Icon.ERROR)
-		SetBusy(false,false)
-		log.DeviceMessage(HData.DEVICE, 2, 0, "Hub connection set-up failed. Check IP Address %s",ipAddress)
---		utils.SetLuupFailure(2, HData.DEVICE)
---		return false, "Hub connection set-up failed. Check IP Address.", HData.Description
-		utils.SetLuupFailure(0, HData.DEVICE)
-		return true
-	end	
---[[	log.Info("Using Harmony Hub: IP address %s.",ipAddress)
-	-- If starting with polling disabled, no connection is made with the Hub until the first command is send or polling gets enabled again.
-	local poll = (var.GetNumber("HubPolling") == 1)
-	if not Harmony.Initialize(ipAddress, nil, "HH"..HData.DEVICE.."#rboer", poll) then 
-		setStatusIcon(HData.Icon.ERROR)
-		SetBusy(false,false)
+		log.Error("SetHubIPAddress, %s is not a valid IP address.", ipa)
+		var.Set("LinkStatus","Hub connection failed. Check IP Address.")
 		utils.SetLuupFailure(2, HData.DEVICE)
 		return false, "Hub connection set-up failed. Check IP Address.", HData.Description
-	end	
+	end
+	log.Info("Changing Harmony Hub: IP address %s.",ipAddress)
+	-- If starting with polling disabled, no connection is made with the Hub until the first command is send or polling gets enabled again.
+	local poll = (var.GetNumber("HubPolling") == 1)
+	if not Harmony.Initialize(ipAddress, port, "HH"..HData.DEVICE.."#rboer", poll) then 
+		setStatusIcon(HData.Icon.ERROR)
+		log.Error("SetHubIPAddress, unable to reconnect on IP address %s.", ipAddress)
+		var.Set("LinkStatus","Hub connection failed. Check IP Address.")
+		utils.SetLuupFailure(2, HData.DEVICE)
+		return false, "Hub connection set-up failed. Check IP Address.", HData.Description
+	end
+
 	-- Populate details from the Hub V3.0, First startup is never with polling disabled, so should be ok.
 	if poll then
 		local res, data, cde, msg = Harmony.GetHubDetails()
@@ -3786,7 +3748,6 @@ function Harmony_init(lul_device)
 			var.Set("FriendlyName", data.friendly_name)	
 		end	
 	end
-]]	
 	-- Register call back handlers for messages from the Hub.
 	Harmony.RegisterCallBack("harmonyengine.metadata?notify", Harmony_CB_MetadataNotify)
 	Harmony.RegisterCallBack("connect.stateDigest?notify", Harmony_CB_StateDigestNotify)
@@ -3795,12 +3756,15 @@ function Harmony_init(lul_device)
 	Harmony.RegisterCallBack("harmony.engine?startActivityFinished", Harmony_CB_StartActivityFinished)
 	Harmony.RegisterCallBack("automation.state?notify", Harmony_CB_AutomationStateNotify)
 	
-	-- See if activities are setup.
-	local buttons = Harmony_GetButtonData(devID, HData.SIDS.MODULE, false)
-	if #buttons == 0 then
-		log.DeviceMessage(HData.DEVICE, 2, 0, "No activities configured.")
-	end	
-
+	-- Don't do this on openLuup as there is no reload needed after changing button config, so message won't go away.
+	if not HData.onOpenLuup then
+		-- See if activities are setup. Post message is not.
+		local buttons = Harmony_GetButtonData(devID, HData.SIDS.MODULE, false)
+		if #buttons == 0 then
+			log.DeviceMessage(HData.DEVICE, true, 0, "No activities configured.")
+		end	
+	end
+	
 	--	Schedule to finish rest of start up in a few seconds
 	luup.call_delay("Harmony_Setup", 3, "", false)
 	log.Debug("Harmony Hub Control: init_module completed.")

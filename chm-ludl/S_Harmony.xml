@@ -51,10 +51,6 @@
       <dataType>ui1</dataType>
     </stateVariable>
 	<stateVariable sendEvents="no">
-      <name>HubIPAddress</name>
-      <dataType>string</dataType>
-    </stateVariable>
-	<stateVariable sendEvents="no">
       <name>DeviceID</name>
       <dataType>string</dataType>
     </stateVariable>
@@ -162,18 +158,6 @@
 				<name>newImageRemote</name>
 				<direction>in</direction>
 				<relatedStateVariable>RemoteImages</relatedStateVariable>
-			</argument>
-		</argumentList>
-    </action>
-    <action>
-		<name>SetHubIPAddress</name>
-		<argumentList>
-			<argument>
-				<name>newIPAddress</name>
-				<direction>in</direction>
-				<name>newPort</name>
-				<direction>in</direction>
-				<relatedStateVariable>HubIPAddress</relatedStateVariable>
 			</argument>
 		</argumentList>
     </action>

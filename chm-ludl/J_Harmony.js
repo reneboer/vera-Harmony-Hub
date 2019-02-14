@@ -1,11 +1,12 @@
 //# sourceURL=J_Harmony.js
 /* harmony Hub Control UI
  Written by R.Boer. 
- V3.5 12 February 2019
+ V3.5 14 February 2019
 
  V3.5 Changes:
  		Removed the HTTP Server as option.
 		Removed remote images option for openLuup as ALTUI handles images properly.
+		Chnaged Settings panel to no longer need a Save button and minimize reloads.
 		Default js is now for UI7 and openLuup.
 
  V3.3 Changes:
@@ -162,10 +163,13 @@ var Harmony = (function (api) {
 	function _UpdateSettingsCB(deviceID,varID) {
 		showBusy(true);
 		var notifyMsg = "";
+		var triggerReload = false;
 		var val = htmlGetElemVal(deviceID, varID);
 		switch (varID) {
 		case 'HubIPAddress':
-			api.performLuActionOnDevice(deviceID, HAM_SID, 'SetHubIPAddress',  { actionArguments: { newIPAddress: ''+val }});
+			varSet(deviceID,'HubIPAddress',val);
+			notifyMsg = "Setting updated and Vera reload in progress. Refresh your browser when done.";
+			triggerReload = true;
 			break;
 		case 'OkInterval':
 			varSet(deviceID,'OkInterval',val);
@@ -181,8 +185,12 @@ var Harmony = (function (api) {
 			api.performLuActionOnDevice(deviceID, HAM_SID, 'SetLogLevel',  { actionArguments: { newLogLevel: val }});
 			break;
 		}
+		application.sendCommandSaveUserData(true);
 		if (notifyMsg !== "") {
 			setTimeout(function() {
+				if (triggerReload) {
+					doReload(deviceID);
+				}	
 				showBusy(false);
 				try {
 					api.ui.showMessagePopup(notifyMsg,0);
