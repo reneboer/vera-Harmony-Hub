@@ -3,10 +3,9 @@
 	
 	Written by R.Boer. 
 	V3.5 14 February 2019
-				to-do, add media player (Sonos) functions (V3.x).
 	
 	V3.5 Changes:
-				On OpenLuup no JSON rewrite is needed as panels are dynamic. Should avoid new (dummy) device on upgrade.
+				On OpenLuup no JSON rewrite is needed as panels are dynamic. Avoids new (dummy) device on upgrade.
 				Corrected button width setting by not fixing the number of buttons per row (UI7 only).
 				Fix to avoid config reload attempts when no lamp devices are present.
 				Fix for restarting while HubPolling is disabled. We can now restart with Hub off.
@@ -14,6 +13,7 @@
 				J_Harmony.js is now for UI7 and openLuup. J_Harmony_UI5.js for old systems.
 				Added action to change log level without reload
 				Added action to change Remote Images settings in LUA.
+				When device manufacturer is Sonos then the playing Album and last known Volume are shown.
 				Some more ConfigFilesAPI rewrites.
 				Better screen message handling incase of errors or incomplete configurations.
 	V3.4 Changes:
@@ -1679,7 +1679,7 @@ local function ConfigFilesAPI()
 	end
 
 	-- Build the JSON file 
-	local function _writeJsonFile(devID,outf,iconPath,isChild,buttons,childDev)
+	local function _writeJsonFile(devID,outf,iconPath,isChild,buttons,childDev,isSonos)
 --		local id, lab, dur, sid
 		local id, lab, dur
 		local numBtn = #buttons
@@ -1765,12 +1765,23 @@ local function ConfigFilesAPI()
 			top = 160
 			if numBtn > 20 then top = top + 25 end
 			outf:write(_buildJsonLabelControl('Controlling Hub:',top,50,100,20) .. ',\n')
-			local tmpstr = _buildJsonVariableControl('HubName',top,200,80,20)
+			local tmpstr = _buildJsonVariableControl('HubName',top,100,80,20)
 			outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
 			top = top + 20
 			outf:write(_buildJsonLabelControl('Last command:',top,50,100,20) .. ',\n')
-			local tmpstr = _buildJsonVariableControl('LastDeviceCommand',top,200,80,20)
+			local tmpstr = _buildJsonVariableControl('LastDeviceCommand',top,100,80,20)
 			outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. '\n]},\n')
+			if isSonos then
+				-- For Sonos player show album that is playing and current volume.
+				top = top + 20
+				outf:write(_buildJsonLabelControl('Album:',top,50,100,20) .. ',\n')
+				local tmpstr = _buildJsonVariableControl('Album',top,100,100,20)
+				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. '\n]},\n')
+				top = top + 20
+				outf:write(_buildJsonLabelControl('Volume:',top,50,100,20) .. ',\n')
+				local tmpstr = _buildJsonVariableControl('Volume',top,100,100,20)
+				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. '\n]},\n')
+			end
 			outf:write(_buildJsonLabel('settings','Settings',true,tab,jsFile,jsPfx..'DeviceSettings'),',\n')
 			tab = tab+1
 		else
@@ -1881,14 +1892,14 @@ local function ConfigFilesAPI()
 	end
 
 	-- Create the new Static JSON and compress it unless on openLuup
-	local function _create_JSON_file(devID,name,isChild,buttons,remicons,childDev,prnt_id)
+	local function _create_JSON_file(devID,name,isChild,buttons,remicons,childDev,prnt_id,isSonos)
 		local prnt
 		if prnt_id then prnt = prnt_id..'_' else prnt = '' end
 		local iconPath = locIconURI
 		if remicons then iconPath = remIconURI end
 		local jsonOut = FilePath..name..prnt..devID..'.json'
 		local outf = io.open(jsonOut..'X', 'w')
-		local ret = _writeJsonFile(devID,outf,iconPath,isChild,buttons,childDev)
+		local ret = _writeJsonFile(devID,outf,iconPath,isChild,buttons,childDev,isSonos)
 		outf:close()
 		-- Only make new file when write was successful.
 		if IsOpenLuup then 
@@ -3052,13 +3063,14 @@ function Harmony_UpdateDeviceButtons(devID, upgrade)
 	if dname then tmp, dnum = string.match(dname, "(%d+)_(%d+)") end
 	local buttons = Harmony_GetButtonData(devID, HData.SIDS.CHILD, true)
 	local remicons = (var.GetNumber('RemoteImages') == 1)
+	local manu = var.GetAttribute("manufacturer",devID)
 	if dnum then 
 		-- If we do this for an upgrade then also do a new D_ file
 		if upgrd then cnfgFile.CreateDeviceFile(dnum,'HarmonyDevice',prnt_id) end
-		cnfgFile.CreateJSONFile(dnum,'D_HarmonyDevice',true,buttons,remicons,devID,prnt_id)
+		cnfgFile.CreateJSONFile(dnum,'D_HarmonyDevice',true,buttons,remicons,devID,prnt_id,manu=="Sonos")
 	else
 		cnfgFile.CreateDeviceFile(deviceID,'HarmonyDevice',prnt_id)
-		cnfgFile.CreateJSONFile(deviceID,'D_HarmonyDevice',true,buttons,remicons,devID,prnt_id)
+		cnfgFile.CreateJSONFile(deviceID,'D_HarmonyDevice',true,buttons,remicons,devID,prnt_id,manu=="Sonos")
 		local fname = "D_HarmonyDevice"..prnt_id.."_"..deviceID
 		var.SetAttribute("device_file",fname..".xml",devID)
 		if utils.GetUI() >= utils.IsUI7 then
@@ -3263,6 +3275,24 @@ local function Harmony_CreateChildren()
 						log.DeviceMessage(chdev, true, 0, "No Commands configured.")
 					end	
 				end	
+				local devConfigs = var.Get("Devices")
+				-- If nothing defined, we never could pull anything from the Hub. Just stop.
+				if devConfigs ~= "" then
+					local Devices_t = json.decode(devConfigs)
+					local device = nil
+					-- Find matching Lamp definition
+					for i = 1, #Devices_t.devices do 
+						if Devices_t.devices[i].ID == deviceID then
+							device = Devices_t.devices[i]
+							break
+						end	
+					end
+					if device then
+						-- Set attributes
+						if device.Model then var.SetAttribute("model",device.Model,chdev) end
+						if device.Manufacturer then var.SetAttribute("manufacturer",device.Manufacturer,chdev) end
+					end	
+				end
 			end
 		end
 	else
