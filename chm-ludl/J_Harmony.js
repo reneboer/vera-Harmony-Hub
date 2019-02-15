@@ -93,11 +93,15 @@ var Harmony = (function (api) {
 			var bCtv = true;
 			if (bOnALTUI) {
 				var udObj = api.getUserData();	
-				// We are running on openLuup locally, see if the top level device is zero; I.e. local.
-				if (udObj.BuildVersion === '*1.7.0*' && deviceObj.id_parent != 0) {
-					// Not local, ask VeraBridge handing the device what it is talking to. Only latest version has RemotePort that can be for other OpenLuup.
-					var vp = varGet(deviceObj.id_parent,'RemotePort',VB_SID);
-					bCtv = Boolean(vp !== ':3480');
+				if (udObj.BuildVersion === '*1.7.0*') {
+					// We are running on openLuup locally, see if the top level device is zero; I.e. local.
+					if (deviceObj.id_parent != 0) {
+						// Not local, ask VeraBridge handing the device what it is talking to. Only latest version has RemotePort that can be for other OpenLuup.
+						var vp = varGet(deviceObj.id_parent,'RemotePort',VB_SID);
+						bCtv = Boolean(vp !== ':3480');
+					} else {
+						bCtv = false;
+					}
 				}
 			}
 			bControllerIsVera = bCtv;
@@ -452,6 +456,7 @@ var Harmony = (function (api) {
 			// Wait a second to send the actual action, as it may have issues not saving all data on time.
 			application.sendCommandSaveUserData(true);
 			api.performLuActionOnDevice(deviceID, HAM_CHSID, 'UpdateDeviceButtons', {});
+			var deviceObj = api.getDeviceObject(deviceID);
 			if (getTargetControllerType(deviceObj)) {
 				// Vera requires static JSON rewrite and reload.
 				setTimeout(function() {
@@ -701,4 +706,3 @@ var Harmony = (function (api) {
     };
     return myModule;
 })(api);
-

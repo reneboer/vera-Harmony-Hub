@@ -1,5 +1,5 @@
 --[==[
-	Module L_Harmony1.lua
+	Module L_Harmony.lua
 	
 	Written by R.Boer. 
 	V3.5 14 February 2019
@@ -181,7 +181,6 @@ local HData = { -- Data used by Harmony Plugin
 		DIM = "urn:upnp-org:serviceId:Dimming1",
 		COL = "urn:micasaverde-com:serviceId:Color1"
 	},
---	RemoteIconURL = "http://www.reneboer.demon.nl/veraimg/",
 	RemoteIconURL = "https://raw.githubusercontent.com/reneboer/vera-Harmony-Hub/master/icons/",
 	UI7IconURL = "",
 	UI5IconURL = "icons\\/",
@@ -192,7 +191,6 @@ local HData = { -- Data used by Harmony Plugin
 	Plugin_Disabled = false,
 	Busy = false,
 	BusyChange = 0,
-	StartActivityBusy = 0,
 	OK = 'OK',
 	ER = 'ERROR',
 	Icon = {
@@ -3491,7 +3489,7 @@ function Harmony_init(lul_device)
 
 	var.Initialize(HData.SIDS.MODULE, HData.DEVICE)
 	
-	var.Default("LogLevel", log.LLError)
+	var.Default("LogLevel", 1)
 	log.Initialize(HData.Description, var.GetNumber("LogLevel"))
 	utils.Initialize()
 

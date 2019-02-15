@@ -1,3 +1,9 @@
+<?xml version="1.0"?>
+<!-- 
+	Module I_HarmonyDevice.xml
+	Written by R.Boer. 
+	V3.5, 14 February 2019
+-->
 <implementation>
 	<specVersion>
 		<major>1</major>
