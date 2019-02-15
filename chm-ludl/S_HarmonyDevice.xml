@@ -1,43 +1,48 @@
 <?xml version="1.0"?>
+<!-- 
+	Module S_HarmonyDevice.xml
+	Written by R.Boer. 
+	V3.5, 14 February 2019
+-->
 <scpd xmlns="urn:schemas-upnp-org:service-1-0">
-  <specVersion>
-    <major>1</major>
-    <minor>0</minor>
-  </specVersion>
-  <serviceStateTable>
-	<stateVariable sendEvents="no">
-      <name>IconSet</name>
-      <dataType>ui4</dataType>
-	  <defaultValue>0</defaultValue>
-    </stateVariable>
-	<stateVariable sendEvents="yes">
-      <name>LastDeviceCommand</name>
-      <dataType>string</dataType>
-    </stateVariable>
-	<stateVariable sendEvents="no">
-      <name>Duration</name>
-      <dataType>ui4</dataType>
-	  <defaultValue>0</defaultValue>
-    </stateVariable>
-  </serviceStateTable>
-  <actionList>
-    <action>
-		<name>UpdateDeviceButtons</name>
-    </action>
-    <action>
-		<name>SendDeviceCommand</name>
-		<argumentList>
-			<argument>
-				<name>Command</name>
-				<direction>in</direction>
-				<relatedStateVariable>LastDeviceCommand</relatedStateVariable>
-			</argument>
-			<argument>
-				<name>Duration</name>
-				<direction>in</direction>
-				<relatedStateVariable>Duration</relatedStateVariable>
-			</argument>
-		</argumentList>
-	</action>
-  </actionList>
+	<specVersion>
+		<major>1</major>
+		<minor>0</minor>
+	</specVersion>
+	<serviceStateTable>
+		<stateVariable sendEvents="no">
+			<name>IconSet</name>
+			<dataType>ui4</dataType>
+			<defaultValue>0</defaultValue>
+		</stateVariable>
+		<stateVariable sendEvents="yes">
+			<name>LastDeviceCommand</name>
+			<dataType>string</dataType>
+		</stateVariable>
+		<stateVariable sendEvents="no">
+			<name>Duration</name>
+			<dataType>ui4</dataType>
+			<defaultValue>0</defaultValue>
+		</stateVariable>
+	</serviceStateTable>
+	<actionList>
+		<action>
+			<name>UpdateDeviceButtons</name>
+		</action>
+		<action>
+			<name>SendDeviceCommand</name>
+			<argumentList>
+				<argument>
+					<name>Command</name>
+					<direction>in</direction>
+					<relatedStateVariable>LastDeviceCommand</relatedStateVariable>
+				</argument>
+				<argument>
+					<name>Duration</name>
+					<direction>in</direction>
+					<relatedStateVariable>Duration</relatedStateVariable>
+				</argument>
+			</argumentList>
+		</action>
+	</actionList>
 </scpd>

@@ -1,64 +1,67 @@
 {
 	"flashicon": "icons\/Harmony.png",
 	"default_icon": "Harmony.png",
-    "inScene": "1",
-    "ToggleButton": 1,
-	"Tabs": [
-		{
-			"Label": {
-				"lang_tag": "tabname_control",
-				"text": "Control"
-			},
-			"Position": "0",
-			"TabType": "flash",
-			"SceneGroup": [
-				{
-					"id": "1",
-					"top": "0",
-					"left": "0",
-					"x": "2",
-					"y": "3"
-				}
-            ],
-			"ControlGroup": [
-				{
-					"id": "1",
-					"scenegroup": "1",
-					"isSingle": "1"
-				}
-			],
-			"Control": [
-				{
-					"ControlGroup": "1",
-                    "ControlType": "label",
-					"top": 0,
-					"left": 0,
-					"text_align": "left",
-                    "Label": {
-                        "lang_tag": "not_initialized",
-                        "text": "Plug in not yet initialized. Wait a moment and then Reload device and Browser."
-                    },
-					"Display": {
-						"Top": 45,
-						"Left": 150,
-						"Width": 250,
-						"Height": 20
-					}
-				}
-			]
+	"inScene": "1",
+	"ToggleButton": 1,
+	"Tabs": [{
+		"Label": {
+			"lang_tag": "tabname_control",
+			"text": "Control"
 		},
-		{
+		"Position": "0",
+		"TabType": "flash",
+		"SceneGroup": [	{
+			"id": "1",
+			"top": "0",
+			"left": "0",
+			"x": "2",
+			"y": "3"
+		} ],
+		"ControlGroup": [ {
+			"id": "1",
+			"scenegroup": "1",
+			"isSingle": "1"
+		} ],
+		"Control": [ {
+			"ControlGroup": "1",
+			"ControlType": "label",
+			"top": 0,
+			"left": 0,
+			"text_align": "left",
 			"Label": {
-				"lang_tag": "advanced",
-				"text": "Advanced"
+				"lang_tag": "not_initialized",
+				"text": "Plug in not yet initialized. Wait a moment and then Reload device and Browser."
 			},
-			"Position": "2",
-			"TabType": "javascript",
-			"ScriptName": "shared.js",
-			"Function": "advanced_device"
-		}
-	],
-    "eventList2": [ ],
+			"Display": {
+				"Top": 45,
+				"Left": 150,
+				"Width": 250,
+				"Height": 20
+			}
+		}]
+	},
+	{ 
+		"Label": { 
+			"lang_tag": "settings", 
+			"text": "Settings" 
+		}, 
+		"TopNavigationTab": 1, 
+		"Position": "1", 
+		"TabType": "javascript", 
+		"ScriptName": "J_Harmony.js", 
+		"Function": "Harmony.DeviceSettings" 
+	},
+	{
+		"Label": {
+			"lang_tag": "advanced",
+			"text": "Advanced"
+		},
+		"Position": "2",
+		"TabType": "javascript",
+		"ScriptName": "shared.js",
+		"Function": "advanced_device"
+	} ],
+	"eventList2": [ ],
 	"device_type": "urn:schemas-rboer-com:device:HarmonyDevice:1",
 	"DeviceType": "urn:schemas-rboer-com:device:HarmonyDevice:1"
 }

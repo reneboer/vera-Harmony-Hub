@@ -1,22 +1,27 @@
 <?xml version="1.0"?>
+<!-- 
+	Module D_HarmonyDevice.xml
+	Written by R.Boer. 
+	V3.5, 14 February 2019
+-->
 <root xmlns="urn:schemas-upnp-org:device-1-0">
-  <specVersion>
-    <major>1</major>
-    <minor>0</minor>
-  </specVersion>
-  <device>
-    <deviceType>urn:schemas-rboer-com:device:HarmonyDevice:1</deviceType>
-    <Category_Num>3</Category_Num>
-    <SubCategory_Num>0</SubCategory_Num>
-	<staticJson>D_HarmonyDevice.json</staticJson>
-    <friendlyName>Harmony Device</friendlyName>
-    <manufacturer>Rene Boer</manufacturer>
-    <serviceList>
-      <service>
-        <serviceType>urn:schemas-rboer-com:service:HarmonyDevice:1</serviceType>
-        <serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
-        <SCPDURL>S_HarmonyDevice.xml</SCPDURL>
-      </service>
-    </serviceList>
-  </device>
+	<specVersion>
+		<major>1</major>
+		<minor>0</minor>
+	</specVersion>
+	<device>
+		<deviceType>urn:schemas-rboer-com:device:HarmonyDevice:1</deviceType>
+		<Category_Num>3</Category_Num>
+		<SubCategory_Num>0</SubCategory_Num>
+		<staticJson>D_HarmonyDevice.json</staticJson>
+		<friendlyName>Harmony Device</friendlyName>
+		<manufacturer>Rene Boer</manufacturer>
+		<serviceList>
+			<service>
+				<serviceType>urn:schemas-rboer-com:service:HarmonyDevice:1</serviceType>
+				<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
+				<SCPDURL>S_HarmonyDevice.xml</SCPDURL>
+			</service>
+		</serviceList>
+	</device>
 </root>
