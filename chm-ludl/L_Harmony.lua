@@ -1774,17 +1774,30 @@ local function ConfigFilesAPI()
 			if isSonos then
 				-- For Sonos player show album that is playing and current volume.
 				outf:write(',\n')
+				top = top + 30
+				outf:write(_buildJsonLabelControl('Sonos',top,50,100,20) .. ',\n')
 				top = top + 20
-				outf:write(_buildJsonLabelControl('Album:',top,50,100,20) .. ',\n')
+				outf:write(_buildJsonLabelControl('Status:',top,70,100,20) .. ',\n')
+				local tmpstr = _buildJsonVariableControl('Status',top,200,100,20)
+				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
+				top = top + 20
+				outf:write(_buildJsonLabelControl('Volume:',top,70,100,20) .. ',\n')
+				local tmpstr = _buildJsonVariableControl('Volume',top,200,100,20)
+				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
+				top = top + 20
+				outf:write(_buildJsonLabelControl('Artist:',top,70,100,20) .. ',\n')
+				local tmpstr = _buildJsonVariableControl('Artist',top,200,100,20)
+				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
+				top = top + 20
+				outf:write(_buildJsonLabelControl('Title:',top,70,100,20) .. ',\n')
 				local tmpstr = _buildJsonVariableControl('Album',top,200,100,20)
 				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
 				top = top + 20
-				outf:write(_buildJsonLabelControl('Volume:',top,50,100,20) .. ',\n')
-				local tmpstr = _buildJsonVariableControl('Volume',top,200,100,20)
-				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. '\n]},\n')
-			else	
-				outf:write('\n]},\n')
+				outf:write(_buildJsonLabelControl('Album:',top,70,100,20) .. ',\n')
+				local tmpstr = _buildJsonVariableControl('Album',top,200,100,20)
+				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
 			end
+			outf:write('\n]},\n')
 			outf:write(_buildJsonLabel('settings','Settings',true,tab,jsFile,jsPfx..'DeviceSettings'),',\n')
 			tab = tab+1
 		else
@@ -3148,8 +3161,6 @@ local function Harmony_SyncDevices(childDevices)
 				HData.SIDS.CHILD..",HubName="..var.GetAttribute("name"),
 				HData.SIDS.CHILD..",DeviceCommands=",
 			}
-
---			local init = "urn:micasaverde-com:serviceId:HaDevice1,HideDeleteButton=1\n"..HData.SIDS.CHILD..",DeviceID=".. deviceID.."\n"..HData.SIDS.CHILD..",HubName="..var.GetAttribute("name").."\n"..HData.SIDS.CHILD..",DeviceCommands="
 			local name = "HRM: " .. string.gsub(desc, "%s%(.+%)", "")
 			log.Debug("Child device id " .. altid .. " (" .. name .. "), number " .. deviceID)
 			luup.chdev.append(
@@ -3337,7 +3348,7 @@ end
 -- Schedule it until succesful.
 function Harmony_ScheduleConfigUpdate(configVersion)
 	-- If busy, try again in a second
-log.Debug("Harmony_ScheduleConfigUpdate %s.",configVersion)
+	log.Debug("Harmony_ScheduleConfigUpdate %s.",configVersion)
 	if (GetBusy()) then 
 		luup.call_delay("Harmony_ScheduleConfigUpdate", 1,configVersion)
 	else	
@@ -3355,26 +3366,24 @@ local function Harmony_CB_MetadataNotify(cmd, data)
 	log.Debug("Harmony_CB_MetadataNotify start.")
 	if data.musicMeta then
 		-- {"musicMeta":{"album":"","title":"538","imageUrl":"http://192.168.178.115:1400/getaa?s=1&u=x-sonosapi-stream%3as6712%3fsid%3d254%26flags%3d8224%26sn%3d0","status":"pause","favId":"Sonos-538nnn","artist":"De Coen & Sander Show","deviceId":"42314994"}}
-		local album = data.musicMeta.album
-		local volume = data.musicMeta.volumeLevel
 		local device = tonumber(data.musicMeta.deviceId or "0")
-		if album and device ~= 0 then
-			log.Debug("harmonyengine.metadata?notify; device : %s, album : %s.",device,album)
+		if device ~= 0 then
 			local ch_dev = Harmony_FindDevice(device)
 			if ch_dev then 
-				var.Set("Album", album, HData.SIDS.CHILD, ch_dev) 
+				local status = data.musicMeta.status
+				local album = data.musicMeta.album
+				local volume = data.musicMeta.volumeLevel
 				local title = data.musicMeta.title
 				local artist = data.musicMeta.artist
-				if title then var.Set("Title", title, HData.SIDS.CHILD, ch_dev)  end
-				if artist then var.Set("Artist", artist, HData.SIDS.CHILD, ch_dev)  end
-			end
-		elseif volume and device ~= 0 then
-			log.Debug("harmonyengine.metadata?notify; device : %s, volumeLevel : %s.",device,volume)
-			local ch_dev = Harmony_FindDevice(device)
-			if ch_dev then var.Set("Volume", volume, HData.SIDS.CHILD, ch_dev) end
+				if status then var.Set("Status", status, HData.SIDS.CHILD, ch_dev) end
+				if title then var.Set("Title", title, HData.SIDS.CHILD, ch_dev) end
+				if artist then var.Set("Artist", artist, HData.SIDS.CHILD, ch_dev) end
+				if album then var.Set("Album", album, HData.SIDS.CHILD, ch_dev) end
+				if volume then var.Set("Volume", volume, HData.SIDS.CHILD, ch_dev) end
+			end	
 		end
 	end	
-	log.Debug(json.encode(data))
+--	log.Debug(json.encode(data))
 	return "OK"
 end
 
@@ -3471,7 +3480,6 @@ local function Harmony_CB_AutomationStateNotify(cmd,data)
 			local chdev = Harmony_FindLamp(udn)
 			if chdev then
 				log.Debug("automation.state?notify: device %s, udn %s.",chdev,udn)
---log.Debug(json.encode(dt))				
 				Harmony_UpdateLampStatus(chdev,dt)
 			else
 				log.Log("AutomationStateNotify; Unconfigured automation device %s.",udn)
@@ -3519,9 +3527,7 @@ function Harmony_init(lul_device)
 	utils = utilsAPI()
 	cnfgFile = ConfigFilesAPI()
 	Harmony = HarmonyAPI()
-
 	var.Initialize(HData.SIDS.MODULE, HData.DEVICE)
-	
 	var.Default("LogLevel", 1)
 	log.Initialize(HData.Description, var.GetNumber("LogLevel"))
 	utils.Initialize()
@@ -3565,16 +3571,10 @@ function Harmony_init(lul_device)
 	-- Set Alt ID on first run, may avoid issues
 	var.SetAttribute('altid', 'HAM'..HData.DEVICE..'_CNTRL')
 	-- Make sure all (advanced) parameters are there
---	local email = var.Default("Email")
---	local pwd = var.Default("Password")
---	local commTimeOut = tonumber(var.Default("CommTimeOut",5))
---	var.Default("HTTPServer", 0)
-	var.Default("OkInterval",3)
---	var.Default("AuthorizationToken")
+	var.Default("OkInterval",1)
 	var.Default("PluginHaveChildren")
 	var.Default("PluginEmbedChildren", "0")
 	var.Default("DefaultActivity")
-	-- Do not reset the values on restart, only default when non existent
 	var.Default("LinkStatus", "--")
 	var.Default("LastCommand", "--")
 	var.Default("LastCommandTime", "--")
@@ -3659,11 +3659,6 @@ function Harmony_init(lul_device)
 		end	
 		remicons = (var.GetNumber('RemoteImages') == 1)
 		if forcenewjson then
---  Assuming nobody is running version as old that used the IP attribute.
---			local ipa = var.GetAttribute("ip")
---			local ipAddress = string.match(ipa, '^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?%.%d%d?%d?)')
---			if ipAddress then var.Default("HubIPAddress", ipa) end
-			-- Bump loglevel to monitor rewrite
 			log.Warning("Force rewrite of JSON files for correct Vera software version and configuration.")
 			-- Set the category to switch if needed
 			var.SetAttribute('category_num', 3)
@@ -3709,48 +3704,6 @@ function Harmony_init(lul_device)
 						else
 							log.Log("Child device #%s does not have a matching DeviceID set.",devNo)
 						end	
-					else
---[[	We assume no one runs version 1.x.				
-						-- See if I have older version type device that is supported by this hub
-						altid = string.match(deviceID.id, 'HAM_%d+')
-						if altid then 
-							altid = string.match(altid, "%d+")
-							chdevID = var.Get("DeviceID", HData.SIDS.MODULE, devNo) 
-							local suppchID = string.match(childDeviceIDs, chdevID)
-							if chdevID == altid and chdevID == suppchID then
-								-- Transfer values from old to new
-								log.Log("Transferring settings for child device #%s, name %s from Harmony to HarmonyDevice",devNo,chdevID)
-								var.Set("DeviceID", chdevID, HData.SIDS.CHILD, devNo)
-								for idx = 1, 24 do
-									local cmdV = var.Get("Command"..idx, HData.SIDS.MODULE, devNo)
-									local cmdD = var.Get("CommandDesc"..idx, HData.SIDS.MODULE, devNo)
-									if cmdV ~= "" then 
-										var.Set("Command"..idx, cmdV, HData.SIDS.CHILD, devNo)
-										var.Set("Command"..idx, "", HData.SIDS.MODULE, devNo)
-									end
-									if cmdD ~= "" then 
-										var.Set("CommandDesc"..idx, cmdD, HData.SIDS.CHILD, devNo)
-										if idx == 1 then
-											var.Set("CommandDesc"..idx, "REFRESH", HData.SIDS.MODULE, devNo)
-										elseif idx == 2 then	
-											var.Set("CommandDesc"..idx, "BROWSER", HData.SIDS.MODULE, devNo)
-										else
-											var.Set("CommandDesc"..idx, "", HData.SIDS.MODULE, devNo)
-										end
-									end
-								end
-								-- We should only do this once
-								var.Set("DeviceID", "", HData.SIDS.MODULE, devNo)
-								-- Now rewrite buttons, and correct alt ID and device type
-								Harmony_UpdateDeviceButtons(devNo,true)
-								local chd_type = var.GetAttribute('device_type',devNo)
-								var.SetAttribute('device_type',chd_type:gsub('_'..chdevID,HData.DEVICE..'_'..chdevID),devNo)
-								var.SetAttribute('altid','HAM'..HData.DEVICE..'_'..chdevID,devNo)
-								var.SetAttribute('category_num', 3,devNo)
-								log.Log("Rewritten files for child device #%s name %s.",devNo,chdevID)
-							end
-						end
-]]						
 					end
 				end
 			else
