@@ -3675,6 +3675,7 @@ function Harmony_init(lul_device)
 			-- Then for any child devices, as they are not yet set, we must look at altid we use.
 			cnfgFile.RemoveObsoleteChildDeviceFiles()
 			local childDeviceIDs = var.Get("PluginHaveChildren")
+			local devConfigs = var.Get("Devices")
 			if childDeviceIDs ~= "" then
 				for devNo, deviceID in pairs(luup.devices) do
 					local altid = string.match(deviceID.id, 'HAM'..HData.DEVICE..'_%d+')
@@ -3682,6 +3683,24 @@ function Harmony_init(lul_device)
 					if altid then 
 						local tmp, aid = string.match(altid, "(%d+)_(%d+)")
 						if chdevID == aid then
+							-- Set attributes before we recreate device configs.
+							-- If nothing defined, we never could pull anything from the Hub. Just stop.
+							if devConfigs ~= "" then
+								local Devices_t = json.decode(devConfigs)
+								local device = nil
+								-- Find matching device definition
+								for i = 1, #Devices_t.devices do 
+									if Devices_t.devices[i].ID == chdevID then
+										device = Devices_t.devices[i]
+										break
+									end	
+								end
+								if device then
+									-- Set attributes
+									if device.Model then var.SetAttribute("model",device.Model,devNo) end
+									if device.Manufacturer then var.SetAttribute("manufacturer",device.Manufacturer,devNo) end
+								end	
+							end
 							Harmony_UpdateDeviceButtons(devNo,true)
 							var.SetAttribute('category_num', 3,devNo)
 							log.Log("Rewritten files for child device # %s name %s.",devNo,chdevID)
