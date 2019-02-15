@@ -1765,22 +1765,25 @@ local function ConfigFilesAPI()
 			top = 160
 			if numBtn > 20 then top = top + 25 end
 			outf:write(_buildJsonLabelControl('Controlling Hub:',top,50,100,20) .. ',\n')
-			local tmpstr = _buildJsonVariableControl('HubName',top,100,80,20)
+			local tmpstr = _buildJsonVariableControl('HubName',top,200,80,20)
 			outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
 			top = top + 20
 			outf:write(_buildJsonLabelControl('Last command:',top,50,100,20) .. ',\n')
-			local tmpstr = _buildJsonVariableControl('LastDeviceCommand',top,100,80,20)
-			outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. '\n]},\n')
+			local tmpstr = _buildJsonVariableControl('LastDeviceCommand',top,200,80,20)
+			outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. '')
 			if isSonos then
 				-- For Sonos player show album that is playing and current volume.
+				outf:write(',\n')
 				top = top + 20
 				outf:write(_buildJsonLabelControl('Album:',top,50,100,20) .. ',\n')
-				local tmpstr = _buildJsonVariableControl('Album',top,100,100,20)
-				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. '\n]},\n')
+				local tmpstr = _buildJsonVariableControl('Album',top,200,100,20)
+				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
 				top = top + 20
 				outf:write(_buildJsonLabelControl('Volume:',top,50,100,20) .. ',\n')
-				local tmpstr = _buildJsonVariableControl('Volume',top,100,100,20)
+				local tmpstr = _buildJsonVariableControl('Volume',top,200,100,20)
 				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. '\n]},\n')
+			else	
+				outf:write('\n]},\n')
 			end
 			outf:write(_buildJsonLabel('settings','Settings',true,tab,jsFile,jsPfx..'DeviceSettings'),',\n')
 			tab = tab+1
@@ -1847,7 +1850,7 @@ local function ConfigFilesAPI()
 				outf:write(str)
 			end	
 			if isChild then
-				outf:write('], "name": "LastDeviceCommand", "comparisson": "=", "prefix": { "lang_tag": "select_command", "text": "Select command : " }, "suffix": {} } ] },\n')
+				outf:write('], "name": "LastDeviceCommand", "comparisson": "=", "prefix": { "lang_tag": "select_command", "text": "Select command : " }, "suffix": {} } ] }\n')
 			else
 				outf:write('], "name": "CurrentActivityID", "comparisson": "=", "prefix": { "lang_tag": "select_event", "text": "Select activity : " }, "suffix": {} } ] },\n')
 				-- Event for starting activity. Precedes current activity
