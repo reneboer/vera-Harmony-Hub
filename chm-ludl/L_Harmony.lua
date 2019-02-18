@@ -2,8 +2,10 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.5 14 February 2019
+	V3.6 18 February 2019
 	
+	V3.6 Changes:
+				Fix for generating Sonos specific JSON.
 	V3.5 Changes:
 				On OpenLuup no JSON rewrite is needed as panels are dynamic. Avoids new (dummy) device on upgrade.
 				Corrected button width setting by not fixing the number of buttons per row (UI7 only).
@@ -168,8 +170,8 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.5",
-	UIVersion = "3.2",
+	Version = "3.6",
+	UIVersion = "3.3",
 	DEVICE = "",
 	Description = "Harmony Control",
 	SIDS = {
@@ -1790,12 +1792,12 @@ local function ConfigFilesAPI()
 				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
 				top = top + 20
 				outf:write(_buildJsonLabelControl('Title:',top,70,100,20) .. ',\n')
-				local tmpstr = _buildJsonVariableControl('Album',top,200,100,20)
+				local tmpstr = _buildJsonVariableControl('Title',top,200,100,20)
 				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
 				top = top + 20
 				outf:write(_buildJsonLabelControl('Album:',top,70,100,20) .. ',\n')
 				local tmpstr = _buildJsonVariableControl('Album',top,200,100,20)
-				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. ',\n')
+				outf:write(tmpstr:gsub('Harmony1','HarmonyDevice1') .. '')
 			end
 			outf:write('\n]},\n')
 			outf:write(_buildJsonLabel('settings','Settings',true,tab,jsFile,jsPfx..'DeviceSettings'),',\n')
