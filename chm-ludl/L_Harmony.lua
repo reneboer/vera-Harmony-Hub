@@ -6,7 +6,7 @@
 	
 	V3.6 Changes:
 				Fix for generating Sonos specific JSON.
-				Temporary fix for changed Hub discovery options with Hub verison 4.15.250 released Feb 19 2019.
+				Fix for changed Hub discovery options with Hub verison 4.15.250 released Feb 19 2019. Not sure how long it will work. May brake on next Harmony release.
 	V3.5 Changes:
 				On OpenLuup no JSON rewrite is needed as panels are dynamic. Avoids new (dummy) device on upgrade.
 				Corrected button width setting by not fixing the number of buttons per row (UI7 only).
@@ -946,12 +946,14 @@ local function HarmonyAPI()
 	-- Get config information from hub. Needed to get HubID for web socket communications.
 	local function request_hub_info(ipa, port)
 --[[	This is changed with hub version 4.15.250 to a TLS session on the internet.
-		for now returning stored values, else user needs to trace to get remote ID%s
+		for now using an even older call that still seems to be working and alos returns the remoteID
 ]]
         local url = format('http://%s:%s/',ipa,port)
-        local request_body = '{"id":1,"cmd":"connect.discoveryinfo?get","params":{}}'
+--        local request_body = '{"id":1,"cmd":"connect.discoveryinfo?get","params":{}}'
+        local request_body = '{"id":1,"cmd":"setup.account?getProvisionInfo"}'
         local headers = {
-            ['Origin']= 'http://localhost.nebula.myharmony.com',
+--            ['Origin']= 'http://localhost.nebula.myharmony.com',
+            ['Origin']= 'http://sl.dhg.myharmony.com',
             ['Content-Type'] = 'application/json',
             ['Accept'] = 'application/json',
             ['Accept-Charset'] = 'utf-8',
@@ -968,23 +970,24 @@ local function HarmonyAPI()
 		if cde == 200 then
 			local json_response = json.decode(tconcat(result))
 			local data = {}
-			data.friendly_name = json_response['data']['friendlyName'] or ""
-			data.remote_id = json_response['data']['remoteId'] or ""
+--			data.friendly_name = json_response['data']['friendlyName'] or ""
+--			data.remote_id = json_response['data']['remoteId'] or ""
+			data.remote_id = json_response['data']['activeRemoteId'] or ""
 			data.email = json_response['data']['email'] or ""
 			data.account_id = json_response['data']['accountId'] or ""
-			data.uuid = json_response['data']['uuid'] or ""
+--			data.uuid = json_response['data']['uuid'] or ""
 			return true, data
 		else
-			local data = {}
-			data.remote_id = var.GetNumber("RemoteID")
-			data.account_id = var.GetNumber("AccountID")
-			data.friendly_name = var.Get("FriendlyName")
-			data.email = var.Get("Email")
-			if data.remote_id == 0 then
-				log.DeviceMessage(HData.DEVICE,true,"Hub discovery failed. Get RemoteID manually.")
+--			local data = {}
+--			data.remote_id = var.GetNumber("RemoteID")
+--			data.account_id = var.GetNumber("AccountID")
+--			data.friendly_name = var.Get("FriendlyName")
+--			data.email = var.Get("Email")
+--			if data.remote_id == 0 then
+--				log.DeviceMessage(HData.DEVICE,true,"Hub discovery failed. Get RemoteID manually.")
 				return nil, nil, cde or 400, stts or "discover failed."
-			end	
-			return true, data
+--			end	
+--			return true, data
 		end
 
 	end
@@ -1072,7 +1075,8 @@ local function HarmonyAPI()
 			log.Debug("Retrieving Harmony Hub information.")
 			local res, data, cde, msg = request_hub_info(ipa,port)
 			if res then 
-				log.Debug("Hub details : %s, %s, %s, %s.",data.remote_id,data.account_id,data.friendly_name,data.email)
+--				log.Debug("Hub details : %s, %s, %s, %s.",data.remote_id,data.account_id,data.friendly_name,data.email)
+				log.Debug("Hub details : %s, %s, %s.",data.remote_id,data.account_id,data.email)
 				hub_data = data
 			else	
 				log.Error("Connect, failed geting details. Err %s, %s", cde or 500, msg or "unknown") 
@@ -3764,7 +3768,7 @@ function Harmony_init(lul_device)
 		if res then
 			var.Set("RemoteID", data.remote_id)	
 			var.Set("AccountID", data.account_id)	
-			var.Set("FriendlyName", data.friendly_name)	
+--			var.Set("FriendlyName", data.friendly_name)	not availble in Harmony Hub veriosn 4.15.250
 		end	
 	end
 	-- Register call back handlers for messages from the Hub.
