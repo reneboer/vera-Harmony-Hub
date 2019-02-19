@@ -2,10 +2,11 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.6 18 February 2019
+	V3.6 19 February 2019
 	
 	V3.6 Changes:
 				Fix for generating Sonos specific JSON.
+				Temporary fix for changed Hub discovery options with Hub verison 4.15.250 released Feb 19 2019.
 	V3.5 Changes:
 				On OpenLuup no JSON rewrite is needed as panels are dynamic. Avoids new (dummy) device on upgrade.
 				Corrected button width setting by not fixing the number of buttons per row (UI7 only).
@@ -944,6 +945,9 @@ local function HarmonyAPI()
 
 	-- Get config information from hub. Needed to get HubID for web socket communications.
 	local function request_hub_info(ipa, port)
+--[[	This is changed with hub version 4.15.250 to a TLS session on the internet.
+		for now returning stored values, else user needs to trace to get remote ID%s
+]]
         local url = format('http://%s:%s/',ipa,port)
         local request_body = '{"id":1,"cmd":"connect.discoveryinfo?get","params":{}}'
         local headers = {
@@ -971,8 +975,18 @@ local function HarmonyAPI()
 			data.uuid = json_response['data']['uuid'] or ""
 			return true, data
 		else
-			return nil, nil, cde or 400, stts or "discover failed."
+			local data = {}
+			data.remote_id = var.GetNumber("RemoteID")
+			data.account_id = var.GetNumber("AccountID")
+			data.friendly_name = var.Get("FriendlyName")
+			data.email = var.Get("Email")
+			if data.remote_id == 0 then
+				log.DeviceMessage(HData.DEVICE,true,"Hub discovery failed. Get RemoteID manually.")
+				return nil, nil, cde or 400, stts or "discover failed."
+			end	
+			return true, data
 		end
+
 	end
 
 	-- Wait for the response for the given message ID
