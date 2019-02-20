@@ -2,8 +2,10 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.6 19 February 2019
+	V3.7 20 February 2019
 	
+	V3.7 Changes:
+				Only obtain Hub remote ID on setup or IP address change.
 	V3.6 Changes:
 				Fix for generating Sonos specific JSON.
 				Fix for changed Hub discovery options with Hub verison 4.15.250 released Feb 19 2019. Not sure how long it will work. May brake on next Harmony release.
@@ -943,55 +945,6 @@ local function HarmonyAPI()
 	local tinsert = table.insert
 	local tremove = table.remove
 
-	-- Get config information from hub. Needed to get HubID for web socket communications.
-	local function request_hub_info(ipa, port)
---[[	This is changed with hub version 4.15.250 to a TLS session on the internet.
-		for now using an even older call that still seems to be working and alos returns the remoteID
-]]
-        local url = format('http://%s:%s/',ipa,port)
---        local request_body = '{"id":1,"cmd":"connect.discoveryinfo?get","params":{}}'
-        local request_body = '{"id":1,"cmd":"setup.account?getProvisionInfo"}'
-        local headers = {
---            ['Origin']= 'http://localhost.nebula.myharmony.com',
-            ['Origin']= 'http://sl.dhg.myharmony.com',
-            ['Content-Type'] = 'application/json',
-            ['Accept'] = 'application/json',
-            ['Accept-Charset'] = 'utf-8',
-			['Content-Length'] = slen(request_body)
-        }
-		local result = {}
-		local bdy,cde,hdrs,stts = http.request{
-			url=url, 
-			method='POST',
-			sink=ltn12.sink.table(result),
-			source = ltn12.source.string(request_body),
-			headers = headers
-		}
-		if cde == 200 then
-			local json_response = json.decode(tconcat(result))
-			local data = {}
---			data.friendly_name = json_response['data']['friendlyName'] or ""
---			data.remote_id = json_response['data']['remoteId'] or ""
-			data.remote_id = json_response['data']['activeRemoteId'] or ""
-			data.email = json_response['data']['email'] or ""
-			data.account_id = json_response['data']['accountId'] or ""
---			data.uuid = json_response['data']['uuid'] or ""
-			return true, data
-		else
---			local data = {}
---			data.remote_id = var.GetNumber("RemoteID")
---			data.account_id = var.GetNumber("AccountID")
---			data.friendly_name = var.Get("FriendlyName")
---			data.email = var.Get("Email")
---			if data.remote_id == 0 then
---				log.DeviceMessage(HData.DEVICE,true,"Hub discovery failed. Get RemoteID manually.")
-				return nil, nil, cde or 400, stts or "discover failed."
---			end	
---			return true, data
-		end
-
-	end
-
 	-- Wait for the response for the given message ID
 	-- Max attempts to avoid dead lock.
 	local function wait_response(msgid)
@@ -1009,9 +962,6 @@ local function HarmonyAPI()
 					else
 --log.Debug("response is for other message id : "..(response:sub(1,100) or ""))
 						HH_HandleCallBack(data)
---						if type(cbFunction) == "function" then
---							pcall(cbFunction, data)
---						end	
 					end
 				else
 					log.Debug("wait_response: Failed to decode hub response %s.", (errMsg or ""))
@@ -1072,25 +1022,27 @@ local function HarmonyAPI()
 			return nil, nil, 400, "IP address missing" 
 		end
 		if hub_data.remote_id == "" then
-			log.Debug("Retrieving Harmony Hub information.")
-			local res, data, cde, msg = request_hub_info(ipa,port)
-			if res then 
---				log.Debug("Hub details : %s, %s, %s, %s.",data.remote_id,data.account_id,data.friendly_name,data.email)
-				log.Debug("Hub details : %s, %s, %s.",data.remote_id,data.account_id,data.email)
-				hub_data = data
-			else	
-				log.Error("Connect, failed geting details. Err %s, %s", cde or 500, msg or "unknown") 
-				return nil, nil, cde or 500, msg or "unknown"
-			end
+			log.Error("Connect, failed remote ID unknown. ") 
+			return nil, nil, 400, "remote ID unknown"
 		end	
 		if ws_client.is_connected() then
 			log.Debug("We should have websocket open.")
+--			if polling_enabled then
+--				-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
+--				luup.call_delay("HH_ping_loop",30)
+--				HH_message_loop()
+--			end
 			return true, 200
 		else
 			local res, prot, hdrs = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
 			if res then
 				log.Debug("Websocket to Hub is opened...")
 				last_command_ts = os.time()
+				if polling_enabled then
+					-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
+					luup.call_delay("HH_ping_loop",30)
+					HH_message_loop()
+				end
 				return true, 200
 			else	
 				log.Error("Connect, failed to open websocket to hub %s, err %s.",ipa,prot or "")
@@ -1111,12 +1063,44 @@ local function HarmonyAPI()
 		return true, jobStat or JobStatus.NO_JOB
 	end	
 	
-	-- Return the details about the Hub. Populated after a succesfull Connect.
+	-- Return the details about the Hub. Get from Hub if not yet known. This is done before the Websocket is opened.
 	local GetHubDetails= function()
 		if hub_data.remote_id ~= "" then
 			return true, hub_data
 		else
-			return nil, nil, 404, "Hub details unknown."
+			log.Debug("Retrieving Harmony Hub information.")
+			local url = format('http://%s:%s/',ipa,port)
+--			local request_body = '{"id":1,"cmd":"connect.discoveryinfo?get","params":{}}'	-- 	pre Hub V4.15.250
+			local request_body = '{"id":1,"cmd":"setup.account?getProvisionInfo"}'
+			local headers = {
+--				['Origin']= 'http://localhost.nebula.myharmony.com', 						-- 	pre Hub V4.15.250
+				['Origin']= 'http://sl.dhg.myharmony.com',
+				['Content-Type'] = 'application/json',
+				['Accept'] = 'application/json',
+				['Accept-Charset'] = 'utf-8',
+				['Content-Length'] = slen(request_body)
+			}
+			local result = {}
+			local bdy,cde,hdrs,stts = http.request{
+				url=url, 
+				method='POST',
+				sink=ltn12.sink.table(result),
+				source = ltn12.source.string(request_body),
+				headers = headers
+			}
+			if cde == 200 then
+				local json_response = json.decode(tconcat(result))
+--				hub_data.friendly_name = json_response['data']['friendlyName'] or "" 		-- 	pre Hub V4.15.250
+--				hub_data.remote_id = json_response['data']['remoteId'] or ""				-- 	pre Hub V4.15.250
+				hub_data.remote_id = json_response['data']['activeRemoteId'] or ""
+				hub_data.email = json_response['data']['email'] or ""
+				hub_data.account_id = json_response['data']['accountId'] or ""
+				log.Debug("Hub details : %s, %s, %s.",hub_data.remote_id,hub_data.account_id,hub_data.email)
+				return true, hub_data
+			else
+				log.Error("Connect, failed geting details. Err %s, %s", cde or 500, msg or "unknown") 
+				return nil, nil, cde or 400, stts or "discover failed."
+			end
 		end	
 	end
 	
@@ -1346,25 +1330,19 @@ local function HarmonyAPI()
 	
 	--[[ Check for waiting messages from the Hub and process them.
 	--]]
-	local HH_message_loop = function()
+	HH_message_loop = function()
 		if polling_enabled then
---			if jobStat == JobStatus.NO_JOB then
-				-- No job in progress, so see if a message is waiting
---				if ws_client.message_waiting() end
---				jobStat = JobStatus.IN_PROGRESS
-				while ws_client.message_waiting() do
-					local response, op = ws_client.receive()
-					if response then
-						local data, _, errMsg = json.decode(response)
-						if data then
-							HH_HandleCallBack(data)
-						else
-							log.Debug("message_loop: Failed to decode hub response %s.",errMsg)
-						end
-					end	
-				end
---				jobStat = JobStatus.NO_JOB
---			end
+			while ws_client.message_waiting() do
+				local response, op = ws_client.receive()
+				if response then
+					local data, _, errMsg = json.decode(response)
+					if data then
+						HH_HandleCallBack(data)
+					else
+						log.Debug("message_loop: Failed to decode hub response %s.",errMsg)
+					end
+				end	
+			end
 			-- Schedule to check again in one second
 			luup.call_delay("HH_message_loop",1)
 		end
@@ -1373,7 +1351,7 @@ local function HarmonyAPI()
 	--[[ To keep the connection to the Hub open send a ping each 45 seconds or 45 seconds after the last command.
 		  When polling is disabled, then close the connection to the Hub.
 	--]]
-	local HH_ping_loop = function()
+	HH_ping_loop = function()
 		if polling_enabled then
 			local next_poll = os.difftime(os.time(),last_command_ts)
 			if next_poll < 45 then 
@@ -1439,12 +1417,12 @@ local function HarmonyAPI()
 	--[[ Initialize module. If called second time it can be used to change the configuration and connect to a different IP address.
 			params: IP address, non-default port to connect to the Hub, optional function to call for a-sync messages handling.
 	--]]
-	local Initialize = function(_ipa, _port, _msg_prf, _poll)
+	local Initialize = function(_ipa, _port, _rem_id, _msg_prf, _poll)
 		ipa = _ipa or ""
 		port = _port or 8088
 		message_prefix = _msg_prf
---		polling_enabled = (type(cbFunction) == 'function')
 		polling_enabled = _poll
+		hub_data.remote_id = _rem_id
 		-- Need to make this global for luup.call_delay use. 
 		_G.HH_send_hold_command = HH_send_hold_command
 		_G.HH_message_loop = HH_message_loop
@@ -1455,19 +1433,19 @@ local function HarmonyAPI()
 		else
 			Close()
 			-- Reset remote ID as we may have a different IP address.
-			hub_data.remote_id = ""
+--			hub_data.remote_id = ""
 		end
-		local res, data, cde, msg
-		if polling_enabled then
-			res, data, cde, msg = Connect()
-			if res then
-				-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
-				luup.call_delay("HH_ping_loop",30)
-				HH_message_loop()
-			end
-		else
+--		local res, data, cde, msg
+--		if polling_enabled then
+--			res, data, cde, msg = Connect()
+--			if res then
+--				-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
+--				luup.call_delay("HH_ping_loop",30)
+--				HH_message_loop()
+--			end
+--		else
 			res = true
-		end
+--		end
 		return res, data, cde, msg
 	end
 	
@@ -3598,9 +3576,9 @@ function Harmony_init(lul_device)
 	var.Default("LinkStatus", "--")
 	var.Default("LastCommand", "--")
 	var.Default("LastCommandTime", "--")
-	var.Default("RemoteID", "--")	
-	var.Default("AccountID", "--")	
-	var.Default("FriendlyName", "--")	
+	var.Default("RemoteID", "")	
+	var.Default("AccountID", "")	
+	var.Default("FriendlyName", "")	
 	var.Default("hubSwVersion")
 	var.Default("HubConfigVersion", "--")	
 	var.Default("householdUserProfileUri")	
@@ -3746,7 +3724,7 @@ function Harmony_init(lul_device)
 	-- Set the IP address and connect to Hub.
 	if ipAddress == nil then
 		setStatusIcon(HData.Icon.ERROR)
-		log.Error("SetHubIPAddress, %s is not a valid IP address.", ipa)
+		log.Error("Initialize, %s is not a valid IP address.", ipa)
 		var.Set("LinkStatus","Hub connection failed. Check IP Address.")
 		utils.SetLuupFailure(2, HData.DEVICE)
 		return false, "Hub connection set-up failed. Check IP Address.", HData.Description
@@ -3754,23 +3732,46 @@ function Harmony_init(lul_device)
 	log.Info("Changing Harmony Hub: IP address %s.",ipAddress)
 	-- If starting with polling disabled, no connection is made with the Hub until the first command is send or polling gets enabled again.
 	local poll = (var.GetNumber("HubPolling") == 1)
-	if not Harmony.Initialize(ipAddress, port, "HH"..HData.DEVICE.."#rboer", poll) then 
+	local remoteID = var.Get("RemoteID")  -- Pass any known remote ID.
+	if not Harmony.Initialize(ipAddress, port, remoteID, "HH"..HData.DEVICE.."#rboer", poll) then 
 		setStatusIcon(HData.Icon.ERROR)
-		log.Error("SetHubIPAddress, unable to reconnect on IP address %s.", ipAddress)
+		log.Error("Initialize, unable to reconnect on IP address %s.", ipAddress)
 		var.Set("LinkStatus","Hub connection failed. Check IP Address.")
 		utils.SetLuupFailure(2, HData.DEVICE)
 		return false, "Hub connection set-up failed. Check IP Address.", HData.Description
 	end
 
 	-- Populate details from the Hub V3.0, First startup is never with polling disabled, so should be ok.
-	if poll then
+	if remoteID == "" and poll then
 		local res, data, cde, msg = Harmony.GetHubDetails()
 		if res then
 			var.Set("RemoteID", data.remote_id)	
 			var.Set("AccountID", data.account_id)	
+			var.Set("email", data.email)	
 --			var.Set("FriendlyName", data.friendly_name)	not availble in Harmony Hub veriosn 4.15.250
 		end	
 	end
+
+	-- Now we know the remote ID, connect to the hub
+	if remoteID ~= "" then
+		if poll then
+			-- When polling is active, open the conneciton with the Hub
+			if not Harmony.Connect() then
+				setStatusIcon(HData.Icon.ERROR)
+				log.Error("Initialize, unable to reconnect on IP address %s.", ipAddress)
+				var.Set("LinkStatus","Hub connection failed. Check IP Address.")
+				utils.SetLuupFailure(2, HData.DEVICE)
+				return false, "Hub connection set-up failed. Check IP Address.", HData.Description
+			end
+		end
+	else
+		setStatusIcon(HData.Icon.ERROR)
+		log.Error("Initialize, The Hub Remote ID could not be retrieved.")
+		var.Set("LinkStatus","Hub connection failed. Remote ID unknown.")
+		utils.SetLuupFailure(2, HData.DEVICE)
+		return false, "Hub connection set-up failed. Remote ID unknown.", HData.Description
+	end
+
 	-- Register call back handlers for messages from the Hub.
 	Harmony.RegisterCallBack("harmonyengine.metadata?notify", Harmony_CB_MetadataNotify)
 	Harmony.RegisterCallBack("connect.stateDigest?notify", Harmony_CB_StateDigestNotify)
