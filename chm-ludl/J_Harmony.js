@@ -4,7 +4,7 @@
  V3.7 20 February 2019
 
  V3.7 Changes:
-		Clear RemoetID on IP address change.
+		Clear RemoteID on IP address change.
  V3.5 Changes:
  		Removed the HTTP Server as option.
 		Removed remote images option for openLuup as ALTUI handles images properly.
@@ -150,9 +150,6 @@ var Harmony = (function (api) {
 					html +=	htmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo,'UpdateSettingsCB');
 				}
 				html +=	htmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel,'UpdateSettingsCB');
-//				if (bControllerIsVera) {
-//					html +=	htmlAddButton(deviceID, 'UpdateSettings');
-//				}	
 			}
 			html += '</div>';
 			api.setCpanelContent(html);
@@ -169,8 +166,13 @@ var Harmony = (function (api) {
 		var val = htmlGetElemVal(deviceID, varID);
 		switch (varID) {
 		case 'HubIPAddress':
+			// We cannot put this in a call_action as the initialization will fail when IP address is incorrect.
+			// When we don't fail initialization we cannot flag device on openLuup.
 			varSet(deviceID,'HubIPAddress',val);
-			varSet(deviceID,'RemoteID','');	// Clear remote ID as with new IP we need to ask for it again.
+			varSet(deviceID,'RemoteID','');	// Clear remote ID and other Hub details as with new IP we need to ask for it again.
+			varSet(deviceID,'AccountID','');	
+			varSet(deviceID,'email','');	
+			// varSet(deviceID,'FriendlyName','');	// No longer available in hub V4.15.250
 			notifyMsg = "Setting updated and Vera reload in progress. Refresh your browser when done.";
 			triggerReload = true;
 			break;

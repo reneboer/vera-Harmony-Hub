@@ -945,9 +945,128 @@ local function HarmonyAPI()
 	local tinsert = table.insert
 	local tremove = table.remove
 
+	-- Open web-socket to Hub and kick-off message loop if polling is active.
+	local Connect = function()
+		if ((ipa or "") == "") then 
+			log.Error("Connect, no IP Address specified ") 
+			return nil, nil, 400, "IP address missing" 
+		end
+		if hub_data.remote_id == "" then
+			log.Error("Connect, failed remote ID unknown. ") 
+			return nil, nil, 400, "remote ID unknown"
+		end	
+		if ws_client.is_connected() then
+			log.Debug("We should have web-socket open.")
+-- Assume this polling still is active
+--			if polling_enabled then
+--				-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
+--				luup.call_delay("HH_ping_loop",30)
+--				luup.call_delay("HH_message_loop",1)
+--			end
+			return true, 200
+		else
+			local res, prot, hdrs = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
+			if res then
+				log.Debug("Web-socket to Hub is opened...")
+				last_command_ts = os.time()
+				if polling_enabled then
+					-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
+					luup.call_delay("HH_ping_loop",30)
+					luup.call_delay("HH_message_loop",1)
+				end
+				return true, 200
+			else	
+				log.Error("Connect, failed to open web-socket to hub %s, err %s.",ipa,prot or "")
+			end
+			ws_client.close()
+		end	
+		return nil, nil, 503, "Unable to connect."
+	end
+
+	-- Close socket to Hub
+	local Close = function()
+		ws_client.close()
+		return true, 200
+	end
+
+	-- Process message and call registered call back handlers
+	local HH_HandleCallBack = function(resp)
+		local cmd = resp.type or resp.cmd
+		local func = callBacks[cmd]
+		if func then
+			-- Call the registered handler
+			local stat, msg = pcall(func, cmd, resp.data)
+			if not stat then
+				log.Error("Error in call back for command %s, msg %s",cmd,msg)
+			end
+		else
+			-- No call back
+			log.Debug("No call back for command %s.",cmd)
+			log.Debug(json.encode(resp))
+		end	
+		if cmd == "harmony.engine?startActivityFinished" then
+			-- An activity has started, make job as done. Close connection if not polling.
+			if not polling_enabled then Close() end
+			jobStat = JobStatus.NO_JOB
+		end
+		return true
+	end
+
+	-- Check for waiting messages from the Hub and process them.
+	local HH_message_loop = function()
+		if polling_enabled then
+			while ws_client.message_waiting() do
+				local response, op = ws_client.receive()
+				if response then
+					local data, _, errMsg = json.decode(response)
+					if data then
+						HH_HandleCallBack(data)
+					else
+						log.Debug("message_loop: Failed to decode hub response %s.",errMsg)
+					end
+				end	
+			end
+			-- Schedule to check again in one second
+			luup.call_delay("HH_message_loop",1)
+		end
+	end
+
+	-- To keep the connection to the Hub open send a ping each 45 seconds or 45 seconds after the last command.
+	--	  When polling is disabled, then close the connection to the Hub.
+	local HH_ping_loop = function()
+		if polling_enabled then
+			local next_poll = os.difftime(os.time(),last_command_ts)
+			if next_poll < 45 then 
+				next_poll = 45 - next_poll
+			else
+				next_poll = 45 
+			end
+			luup.call_delay("HH_ping_loop",next_poll)
+			if next_poll >= 45 then
+				log.Debug("Keep hub connection open")
+				if ws_client.ping() then
+					last_command_ts = os.time()
+					last_ping_success = last_command_ts
+				else
+					if os.difftime(os.time(),last_ping_success) > 600 then
+						log.Debug("Failed to ping hub for more than five minutes, trying to re-open connection.")
+						Close()
+						Connect()
+					else	
+						log.Debug("Failed to ping hub.")
+					end	
+				end	
+			end	
+		else
+			-- End of polling, close connection to Hub
+			Close()
+			log.Debug("End of polling, closed connection to Hub.")
+		end
+	end	
+
 	-- Wait for the response for the given message ID
 	-- Max attempts to avoid dead lock.
-	local function wait_response(msgid)
+	local wait_response = function(msgid)
 		local maxcnt = numberOfMessages
 		while maxcnt > 1 do
 			maxcnt = maxcnt -1
@@ -1013,68 +1132,23 @@ local function HarmonyAPI()
 		return nil, nil, 408, "Send failed after retry."
 	end
 
-	--[[ Open websocket to Hub. 
-			If not yet known, get the hub information and then open the web socket.
-	--]]
-	local function Connect()
-		if ((ipa or "") == "") then 
-			log.Error("Connect, no IP Address specified ") 
-			return nil, nil, 400, "IP address missing" 
-		end
-		if hub_data.remote_id == "" then
-			log.Error("Connect, failed remote ID unknown. ") 
-			return nil, nil, 400, "remote ID unknown"
-		end	
-		if ws_client.is_connected() then
-			log.Debug("We should have websocket open.")
---			if polling_enabled then
---				-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
---				luup.call_delay("HH_ping_loop",30)
---				HH_message_loop()
---			end
-			return true, 200
-		else
-			local res, prot, hdrs = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
-			if res then
-				log.Debug("Websocket to Hub is opened...")
-				last_command_ts = os.time()
-				if polling_enabled then
-					-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
-					luup.call_delay("HH_ping_loop",30)
-					HH_message_loop()
-				end
-				return true, 200
-			else	
-				log.Error("Connect, failed to open websocket to hub %s, err %s.",ipa,prot or "")
-			end
-			ws_client.close()
-		end	
-		return nil, nil, 503, "Unable to connect."
-	end
-
-	-- Close socket to Hub
-	local function Close()
-		ws_client.close()
-		return true, 200
-	end
-
 	-- Return current Job Status	
 	local GetJobStatus = function()
 		return true, jobStat or JobStatus.NO_JOB
 	end	
 	
-	-- Return the details about the Hub. Get from Hub if not yet known. This is done before the Websocket is opened.
-	local GetHubDetails= function()
+	-- Return the details about the Hub. Get from Hub if not yet known. This is done before the Web-socket is opened.
+	local GetHubDetails = function()
 		if hub_data.remote_id ~= "" then
 			return true, hub_data
 		else
 			log.Debug("Retrieving Harmony Hub information.")
 			local url = format('http://%s:%s/',ipa,port)
 --			local request_body = '{"id":1,"cmd":"connect.discoveryinfo?get","params":{}}'	-- 	pre Hub V4.15.250
-			local request_body = '{"id":1,"cmd":"setup.account?getProvisionInfo"}'
+			local request_body = '{"id":1,"cmd":"setup.account?getProvisionInfo"}'			-- 	ub V4.15.250
 			local headers = {
 --				['Origin']= 'http://localhost.nebula.myharmony.com', 						-- 	pre Hub V4.15.250
-				['Origin']= 'http://sl.dhg.myharmony.com',
+				['Origin']= 'http://sl.dhg.myharmony.com',									-- 	Hub V4.15.250
 				['Content-Type'] = 'application/json',
 				['Accept'] = 'application/json',
 				['Accept-Charset'] = 'utf-8',
@@ -1092,7 +1166,7 @@ local function HarmonyAPI()
 				local json_response = json.decode(tconcat(result))
 --				hub_data.friendly_name = json_response['data']['friendlyName'] or "" 		-- 	pre Hub V4.15.250
 --				hub_data.remote_id = json_response['data']['remoteId'] or ""				-- 	pre Hub V4.15.250
-				hub_data.remote_id = json_response['data']['activeRemoteId'] or ""
+				hub_data.remote_id = json_response['data']['activeRemoteId'] or ""			-- 	Hub V4.15.250
 				hub_data.email = json_response['data']['email'] or ""
 				hub_data.account_id = json_response['data']['accountId'] or ""
 				log.Debug("Hub details : %s, %s, %s.",hub_data.remote_id,hub_data.account_id,hub_data.email)
@@ -1137,13 +1211,13 @@ local function HarmonyAPI()
 	local StartActivity = function(actID,wait)
 		local aid = actID or ""
 		if aid ~= "" then
-			-- Get current activity
+			-- Get current activity, make and keep connection open.
 			local res, data, cde, msg = GetCurrentActivtyID(true)
 			if not res then
 				-- Log error and data is now nil so always try to start
 				log.Error("Failed getting current activity. %s, %s",cde, msg)
 			end	
-			-- Only send if it is a diferent activity.
+			-- Only send if it is a different activity.
 			if data ~= aid then
 				jobStat = JobStatus.IN_PROGRESS
 				local res1, data1, cde1, msg1 = send_request("harmony.activityengine?runactivity", format('{"async": "true","timestamp": 10000 ,"args":{"rule":"start"},"activityId":"%s"}',aid))
@@ -1187,22 +1261,6 @@ local function HarmonyAPI()
 		end
 	end
 
-	--[[ Get State Digest from hub to get config details
-			Return true and data on success, false with error code and message if not.
-	--]]
-	local GetStateDigest = function()
-		jobStat = JobStatus.IN_PROGRESS
-		if not polling_enabled then Connect() end
-		local res, data, cde, msg = send_request("vnd.logitech.connect\\/vnd.logitech.statedigest?get")
-		if not polling_enabled then Close() end
-		if res then 
-			-- The user callback may also want process state digest details.
-			HH_HandleCallBack(data)
-		end
-		jobStat = JobStatus.NO_JOB
-		return res, data, cde, msg
-	end
-	
 	--[[ Send start hold action command. 
 			Params : device ID to send to, command to send, duration to hold the key-press, key-press action.
 			Return true on success, false with error code and message if not.
@@ -1286,9 +1344,7 @@ local function HarmonyAPI()
 		log.Debug("GetAutomationState from Hub.")
 		jobStat = JobStatus.IN_PROGRESS
 		if not polling_enabled then Connect() end
-		local params = "{}"
-		if pars then params = pars end
-		local res, data, cde, msg = send_request("harmony.automation?getState", params)
+		local res, data, cde, msg = send_request("harmony.automation?getState", pars or "{}")
 		if not polling_enabled then Close() end
 		jobStat = JobStatus.NO_JOB
 		return res, data, cde, msg
@@ -1305,94 +1361,35 @@ local function HarmonyAPI()
 		return res, data, cde, msg
 	end
 
-	-- Process message and call registered call back handlers
-	HH_HandleCallBack = function(resp)
-		local cmd = resp.type or resp.cmd
-		local func = callBacks[cmd]
-		if func then
-			-- Call the registered handler
-			local stat, msg = pcall(func, cmd, resp.data)
-			if not stat then
-				log.Error("Error in call back for command %s, msg %s",cmd,msg)
-			end
-		else
-			-- No call back
-			log.Debug("No call back for command %s.",cmd)
-			log.Debug(json.encode(resp))
-		end	
-		if cmd == "harmony.engine?startActivityFinished" then
-			-- An activity has started, make job as done.
-			if not polling_enabled then Close() end
-			jobStat = JobStatus.NO_JOB
-		end
-		return true
-	end
-	
-	--[[ Check for waiting messages from the Hub and process them.
+	--[[ Get State Digest from hub to get config details
+			Return true and data on success, false with error code and message if not.
 	--]]
-	HH_message_loop = function()
-		if polling_enabled then
-			while ws_client.message_waiting() do
-				local response, op = ws_client.receive()
-				if response then
-					local data, _, errMsg = json.decode(response)
-					if data then
-						HH_HandleCallBack(data)
-					else
-						log.Debug("message_loop: Failed to decode hub response %s.",errMsg)
-					end
-				end	
-			end
-			-- Schedule to check again in one second
-			luup.call_delay("HH_message_loop",1)
+	local GetStateDigest = function()
+		jobStat = JobStatus.IN_PROGRESS
+		if not polling_enabled then Connect() end
+		local res, data, cde, msg = send_request("vnd.logitech.connect\\/vnd.logitech.statedigest?get")
+		if not polling_enabled then Close() end
+		if res then 
+			-- The user callback may also want process state digest details.
+			HH_HandleCallBack(data)
 		end
+		jobStat = JobStatus.NO_JOB
+		return res, data, cde, msg
 	end
-	
-	--[[ To keep the connection to the Hub open send a ping each 45 seconds or 45 seconds after the last command.
-		  When polling is disabled, then close the connection to the Hub.
-	--]]
-	HH_ping_loop = function()
-		if polling_enabled then
-			local next_poll = os.difftime(os.time(),last_command_ts)
-			if next_poll < 45 then 
-				next_poll = 45 - next_poll
-			else
-				next_poll = 45 
-			end
-			luup.call_delay("HH_ping_loop",next_poll)
-			if next_poll >= 45 then
-				log.Debug("Keep hub connection open")
-				if ws_client.ping() then
-					last_command_ts = os.time()
-					last_ping_success = last_command_ts
-				else
-					if os.difftime(os.time(),last_ping_success) > 600 then
-						log.Debug("Failed to ping hub for more than five minutes, trying to re-open connection.")
-						Close()
-						Connect()
-					else	
-						log.Debug("Failed to ping hub.")
-					end	
-				end	
-			end	
-		else
-			-- End of polling, close conneciton to Hub
-			Close()
-			log.Debug("End of polling, closed connection to Hub.")
-		end
-	end	
 	
 	-- When called with true then the connection to the Hub will be kept open
 	-- Can be toggled at any time.
 	local SetHubPolling = function(poll)
+		if polling_enabled == poll then return true, 200 end
 		polling_enabled = poll
 		if poll then
 			-- re-open the connection
 			local res, data, cde, msg = Connect()
 			if res then
-				-- Initiate polling again
-				luup.call_delay("HH_ping_loop",30)
-				HH_message_loop()
+-- Moved to Connect			
+--				-- Initiate polling again
+--				luup.call_delay("HH_ping_loop",30)
+--				HH_message_loop()
 			else
 				log.Error("SetPolling, could not reconnect to Hub. Err : %s, %s", cde, msg)
 			end
@@ -1413,9 +1410,9 @@ local function HarmonyAPI()
 		end
 		return nil, nil, 1006, "Not a function"
 	end
-	
+
 	--[[ Initialize module. If called second time it can be used to change the configuration and connect to a different IP address.
-			params: IP address, non-default port to connect to the Hub, optional function to call for a-sync messages handling.
+			params: IP address, non-default port to connect to the Hub, last known RemoteID, message prefix and poll flag.
 	--]]
 	local Initialize = function(_ipa, _port, _rem_id, _msg_prf, _poll)
 		ipa = _ipa or ""
@@ -1435,6 +1432,7 @@ local function HarmonyAPI()
 			-- Reset remote ID as we may have a different IP address.
 --			hub_data.remote_id = ""
 		end
+-- Moved to Connect
 --		local res, data, cde, msg
 --		if polling_enabled then
 --			res, data, cde, msg = Connect()
@@ -3745,17 +3743,18 @@ function Harmony_init(lul_device)
 	if remoteID == "" and poll then
 		local res, data, cde, msg = Harmony.GetHubDetails()
 		if res then
+			remoteID = data.remote_id or ""
 			var.Set("RemoteID", data.remote_id)	
 			var.Set("AccountID", data.account_id)	
 			var.Set("email", data.email)	
---			var.Set("FriendlyName", data.friendly_name)	not availble in Harmony Hub veriosn 4.15.250
+--			var.Set("FriendlyName", data.friendly_name)	not available in Harmony Hub version 4.15.250
 		end	
 	end
 
 	-- Now we know the remote ID, connect to the hub
 	if remoteID ~= "" then
 		if poll then
-			-- When polling is active, open the conneciton with the Hub
+			-- When polling is active, open the connection with the Hub so we start to listen.
 			if not Harmony.Connect() then
 				setStatusIcon(HData.Icon.ERROR)
 				log.Error("Initialize, unable to reconnect on IP address %s.", ipAddress)
