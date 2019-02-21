@@ -3748,6 +3748,12 @@ function Harmony_init(lul_device)
 			var.Set("AccountID", data.account_id)	
 			var.Set("email", data.email)	
 --			var.Set("FriendlyName", data.friendly_name)	not available in Harmony Hub version 4.15.250
+		else
+			setStatusIcon(HData.Icon.ERROR)
+			log.Error("Initialize, The Hub Remote ID could not be retrieved.")
+			var.Set("LinkStatus","Hub connection failed. Remote ID could not be retrieved, check IP address.")
+			utils.SetLuupFailure(2, HData.DEVICE)
+			return false, "Hub connection set-up failed. Remote ID could not be retrieved, check IP address.", HData.Description
 		end	
 	end
 
@@ -3766,9 +3772,9 @@ function Harmony_init(lul_device)
 	else
 		setStatusIcon(HData.Icon.ERROR)
 		log.Error("Initialize, The Hub Remote ID could not be retrieved.")
-		var.Set("LinkStatus","Hub connection failed. Remote ID unknown.")
+		var.Set("LinkStatus","Hub connection failed. Remote ID unknown, check IP address.")
 		utils.SetLuupFailure(2, HData.DEVICE)
-		return false, "Hub connection set-up failed. Remote ID unknown.", HData.Description
+		return false, "Hub connection set-up failed. Remote ID unknown, check IP address.", HData.Description
 	end
 
 	-- Register call back handlers for messages from the Hub.
