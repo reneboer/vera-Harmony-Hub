@@ -1,9 +1,12 @@
 //# sourceURL=J_Harmony_UI5.js
 /* harmony Hub Control UI json for UI5/UI6
  Written by R.Boer. 
- V3.5 12 February 2019
+ V3.7 22 February 2019
 
- V3.5 Changes:
+ V3.7 Changes:
+		Clear RemoteID on IP address change.
+
+		V3.5 Changes:
  		Removed the HTTP Server as option.
 		For UI5 we now have the exception script name.
 
@@ -84,7 +87,7 @@ function hamSettings(deviceID) {
 	if (deviceObj.disabled === '1' || deviceObj.disabled === 1) {
 		html += '<tr><td colspan="2">&nbsp;</td></tr><tr><td colspan="2">Plugin is disabled in Attributes.</td></tr>';
 	} else {		
-		html+= hamhtmlAddInput(deviceID, 'Harmony Hub IP Address', 30, 'HubIPAddress')+
+		html+= hamhtmlAddInput(deviceID, 'Harmony Hub IP Address', 30, 'HubIPAddress','UpdateSettingsCB')+
 		hamhtmlAddPulldown(deviceID, 'Ok Acknowledge Interval', 'OkInterval', timeAck, true)+
 		hamhtmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel, true)+
 //		hamhtmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo, true)+
@@ -95,6 +98,18 @@ function hamSettings(deviceID) {
     set_panel_html(html);
 }
 
+function hamUpdateSettingsCB(deviceID,varID,newVal) {
+	switch (varID) {
+	case 'HubIPAddress':
+		// We cannot put this in a call_action as the initialization will fail when IP address is incorrect.
+		// When we don't fail initialization we cannot flag device on openLuup.
+		hamVarSet(deviceID,'HubIPAddress',newVal);
+		hamVarSet(deviceID,'RemoteID','');	// Clear remote ID and other Hub details as with new IP we need to ask for it again.
+		hamVarSet(deviceID,'AccountID','');	
+		hamVarSet(deviceID,'email','');	
+		break;
+	}
+}
 // Request HTML for activities tab
 function hamActivities(deviceID) {
 	var deviceObj = get_device_obj(deviceID);
@@ -405,11 +420,12 @@ function hamhtmlAddPulldownMultiple(di, lb, vr, values) {
 	return html;
 }
 
-function hamhtmlAddInput(di, lb, si, vr, sid) {
-	val = (typeof df != 'undefined') ? df : hamVarGet(di,vr,sid);
-	var typ = (vr.toLowerCase() == 'password') ? 'type="password"' : 'type="text"';
-	var html = '<tr><td>'+lb+'</td><td><input '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'" '+
-		'onchange="hamVarSet('+di+',\''+vr+'\' , this.value);"></td></tr>';
+function hamhtmlAddInput(di, lb, si, vr, cb) {
+//	val = (typeof df != 'undefined') ? df : hamVarGet(di,vr,sid);
+//	var typ = (vr.toLowerCase() == 'password') ? 'type="password"' : 'type="text"';
+	var onch = (typeof cb != 'undefined') ? ' onchange="ham'+cb+'(\''+di+'\',\''+vr+'\',this.value);" ' : ' ';
+	var typ = 'type="text"';
+	var html = '<tr><td>'+lb+'</td><td><input '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'"'+onch+'></td></tr>';
 	return html;
 }
 

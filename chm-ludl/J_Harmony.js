@@ -1,12 +1,14 @@
 //# sourceURL=J_Harmony.js
 /* harmony Hub Control UI
  Written by R.Boer. 
- V3.5 14 February 2019
+ V3.7 21 February 2019
 
+ V3.7 Changes:
+		Clear RemoteID on IP address change.
  V3.5 Changes:
  		Removed the HTTP Server as option.
 		Removed remote images option for openLuup as ALTUI handles images properly.
-		Chnaged Settings panel to no longer need a Save button and minimize reloads.
+		Changed Settings panel to no longer need a Save button and minimize reloads.
 		Default js is now for UI7 and openLuup.
 
  V3.3 Changes:
@@ -93,15 +95,11 @@ var Harmony = (function (api) {
 			var bCtv = true;
 			if (bOnALTUI) {
 				var udObj = api.getUserData();	
-				if (udObj.BuildVersion === '*1.7.0*') {
-					// We are running on openLuup locally, see if the top level device is zero; I.e. local.
-					if (deviceObj.id_parent != 0) {
-						// Not local, ask VeraBridge handing the device what it is talking to. Only latest version has RemotePort that can be for other OpenLuup.
-						var vp = varGet(deviceObj.id_parent,'RemotePort',VB_SID);
-						bCtv = Boolean(vp !== ':3480');
-					} else {
-						bCtv = false;
-					}
+				// We are running on openLuup locally, see if the top level device is zero; I.e. local.
+				if (udObj.BuildVersion === '*1.7.0*' && deviceObj.id_parent != 0) {
+					// Not local, ask VeraBridge handing the device what it is talking to. Only latest version has RemotePort that can be for other OpenLuup.
+					var vp = varGet(deviceObj.id_parent,'RemotePort',VB_SID);
+					bCtv = Boolean(vp !== ':3480');
 				}
 			}
 			bControllerIsVera = bCtv;
@@ -152,9 +150,6 @@ var Harmony = (function (api) {
 					html +=	htmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo,'UpdateSettingsCB');
 				}
 				html +=	htmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel,'UpdateSettingsCB');
-//				if (bControllerIsVera) {
-//					html +=	htmlAddButton(deviceID, 'UpdateSettings');
-//				}	
 			}
 			html += '</div>';
 			api.setCpanelContent(html);
@@ -171,7 +166,13 @@ var Harmony = (function (api) {
 		var val = htmlGetElemVal(deviceID, varID);
 		switch (varID) {
 		case 'HubIPAddress':
+			// We cannot put this in a call_action as the initialization will fail when IP address is incorrect.
+			// When we don't fail initialization we cannot flag device on openLuup.
 			varSet(deviceID,'HubIPAddress',val);
+			varSet(deviceID,'RemoteID','');	// Clear remote ID and other Hub details as with new IP we need to ask for it again.
+			varSet(deviceID,'AccountID','');	
+			varSet(deviceID,'email','');	
+			// varSet(deviceID,'FriendlyName','');	// No longer available in hub V4.15.250
 			notifyMsg = "Setting updated and Vera reload in progress. Refresh your browser when done.";
 			triggerReload = true;
 			break;
@@ -456,7 +457,6 @@ var Harmony = (function (api) {
 			// Wait a second to send the actual action, as it may have issues not saving all data on time.
 			application.sendCommandSaveUserData(true);
 			api.performLuActionOnDevice(deviceID, HAM_CHSID, 'UpdateDeviceButtons', {});
-			var deviceObj = api.getDeviceObject(deviceID);
 			if (getTargetControllerType(deviceObj)) {
 				// Vera requires static JSON rewrite and reload.
 				setTimeout(function() {
@@ -706,3 +706,4 @@ var Harmony = (function (api) {
     };
     return myModule;
 })(api);
+

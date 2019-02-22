@@ -2,7 +2,7 @@
 <!-- 
 	Module I_Harmony.xml
 	Written by R.Boer. 
-	V3.5, 14 February 2019
+	V3.7, 22 February 2019
 -->
 <implementation>
 	<specVersion>
@@ -22,7 +22,11 @@
 			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 			<name>ForceUpdateConfiguration</name>
 			<job>
-				Harmony_UpdateConfigurations()
+				local res, data, cde, msg = Harmony_UpdateConfigurations()
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3, nil end
+				end	
 				return 4,nil
 			</job>
 			<jobname>StartActivity</jobname>
@@ -31,7 +35,11 @@
 			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 			<name>PowerOff</name>
 			<job>
-				Harmony_PowerOff()
+				local res, data, cde, msg = Harmony_PowerOff()
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3, nil end
+				end	
 				return 4,nil
 			</job>
 			<jobname>StartActivity</jobname>
@@ -40,7 +48,11 @@
 			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 			<name>StartActivity</name>
 			<job>
-				Harmony_StartActivity(lul_settings.newActivityID or "")
+				local res, data, cde, msg = Harmony_StartActivity(lul_settings.newActivityID or "")
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3,nil end
+				end	
 				return 4,nil
 			</job>
 			<jobname>StartActivity</jobname>
@@ -49,7 +61,11 @@
 			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 			<name>ChangeChannel</name>
 			<job>
-				Harmony_ChangeChannel(lul_settings.newChannel or "")
+				local res, data, cde, msg = Harmony_ChangeChannel(lul_settings.newChannel or "")
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3,nil end
+				end	
 				return 4,nil
 			</job>
 			<jobname>StartActivity</jobname>
@@ -114,7 +130,11 @@
 			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 			<name>UpdateButtons</name>
 			<job>
-				Harmony_UpdateButtons(lul_device)
+				local res, data, cde, msg = Harmony_UpdateButtons(lul_device)
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3, nil end
+				end	
 				return 4,nil
 			</job>
 			<jobname>UpdateButtons</jobname>
@@ -123,7 +143,11 @@
 			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 			<name>IssueDeviceCommand</name>
 			<job>
-				Harmony_IssueDeviceCommand(lul_settings.DeviceID or "", lul_settings.Command or "", lul_settings.Duration or "0")
+				local res, data, cde, msg = Harmony_IssueDeviceCommand(lul_settings.DeviceID or "", lul_settings.Command or "", lul_settings.Duration or "0")
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3, nil end
+				end	
 				return 4,nil
 			</job>
 			<jobname>IssueDeviceCommand</jobname>
@@ -132,7 +156,11 @@
 			<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
 			<name>UpdateDeviceButtons</name>
 			<job>
-				Harmony_UpdateDeviceButtons(lul_device)
+				local res, data, cde, msg = Harmony_UpdateDeviceButtons(lul_device)
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3, nil end
+				end	
 				return 4,nil
 			</job>
 			<jobname>UpdateDeviceButtons</jobname>
@@ -141,9 +169,13 @@
 			<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
 			<name>SendDeviceCommand</name>
 			<job>
-				Harmony_SendDeviceCommand(lul_device,lul_settings.Command or "",lul_settings.Duration or "0")
+				local res, data, cde, msg = Harmony_SendDeviceCommand(lul_device,lul_settings.Command or "",lul_settings.Duration or "0")
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3, nil end
+				end	
 				return 4,nil
-				</job>
+			</job>
 			<jobname>SendDeviceCommand</jobname>
 		</action>
 		<action>
@@ -151,6 +183,7 @@
 			<name>SetTarget</name>
 			<job>
 				local newTarget = lul_settings.newTargetValue or ""
+				local res, data, cde, msg 
 				-- See if we are on parent, or Lamp child
 				if lul_device == HData.DEVICE then
 					local curTarget = var.Get("Target", HData.SIDS.SP)
@@ -158,15 +191,19 @@
 						if (newTarget == '1') then 
 							local newActivityID = var.Get('DefaultActivity') 
 							if (newActivityID ~= '') then 
-								Harmony_StartActivity(newActivityID)
+								res, data, cde, msg = Harmony_StartActivity(newActivityID)
 							end	
 						else 
-							Harmony_PowerOff()
+							res, data, cde, msg = Harmony_PowerOff()
 						end
 					end
 				else
 					-- It is a child device. Must be a lamp
-					Harmony_LampSetTarget(lul_device,newTarget)
+					res, data, cde, msg = Harmony_LampSetTarget(lul_device,newTarget)
+				end	
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3, nil end
 				end	
 				return 4,nil
 			</job>
@@ -176,7 +213,11 @@
 			<serviceId>urn:upnp-org:serviceId:Dimming1</serviceId>
 			<name>SetLoadLevelTarget</name>
 			<job>
-				Harmony_LampSetLoadLevelTarget(lul_device,lul_settings.newLoadlevelTarget)
+				local res, data, cde, msg = Harmony_LampSetLoadLevelTarget(lul_device,lul_settings.newLoadlevelTarget)
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3, nil end
+				end	
 				return 4,nil
 			</job>
 			<jobname>SetLoadLevelTarget</jobname>
@@ -185,7 +226,11 @@
 			<serviceId>urn:micasaverde-com:serviceId:Color1</serviceId>
 			<name>SetColorRGB</name>
 			<job>
-				Harmony_LampSetColorRGB(lul_device,lul_settings.newColorRGBTarget)
+				local res, data, cde, msg = Harmony_LampSetColorRGB(lul_device,lul_settings.newColorRGBTarget)
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3, nil end
+				end	
 				return 4,nil
 			</job>
 			<jobname>SetColorRGB</jobname>
@@ -194,7 +239,11 @@
 			<serviceId>urn:micasaverde-com:serviceId:Color1</serviceId>
 			<name>SetColor</name>
 			<job>
-				Harmony_LampSetColor(lul_device,lul_settings.newColorTarget)
+				local res, data, cde, msg = Harmony_LampSetColor(lul_device,lul_settings.newColorTarget)
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3, nil end
+				end	
 				return 4,nil
 			</job>
 			<jobname>SetColor</jobname>
