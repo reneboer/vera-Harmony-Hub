@@ -2,10 +2,12 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.7 20 February 2019
+	V3.7 22 February 2019
 	
 	V3.7 Changes:
 				Only obtain Hub remote ID on setup or IP address change.
+				Increased socket timeout from 10 to 30 seconds to allow load large Hub configs.
+				Better busy check and call_actions will now return proper job status when busy.
 	V3.6 Changes:
 				Fix for generating Sonos specific JSON.
 				Fix for changed Hub discovery options with Hub verison 4.15.250 released Feb 19 2019. Not sure how long it will work. May brake on next Harmony release.
@@ -879,7 +881,7 @@ local function wsAPI()
 			sock:close()
 			return nil,err,nil
 		end
-		sock:settimeout(10)
+		sock:settimeout(30)
 		local key = "IVEs+XMFJmzMFU/4qqJEqw=="  -- We use a fixed key
 		local req = upgrade_request
 			{
@@ -2032,6 +2034,13 @@ local function SetBusy(status, setIcon)
 	end
 end
 local function GetBusy()
+	-- We are not waiting for all bits of the StartActivity command to return.
+	-- So make sure we do not have any current jobs before we give the all clear.
+	local res, stat = Harmony.GetJobStatus()
+	if stat == JobStatus.IN_PROGRESS then 
+--		log.Debug("GetBusy job IN_PROGRESS")
+		return true, true 
+	end
 	return HData.Busy
 end
 -- See if Busy status has not changed for more than a minute. If so clear it as something went wrong.
@@ -2556,7 +2565,7 @@ function Harmony_PowerOff()
 		return nil, nil, 503,"Plugin disabled."
 	end
 	if (GetBusy()) then 
-		log.Warning("PowerOff communication is busy")
+		log.Warning("PowerOff, communication is busy")
 		return nil, nil, 307,"Communication is busy."
 	end
 	SetBusy(true, true)
