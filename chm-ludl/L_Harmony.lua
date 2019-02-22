@@ -175,7 +175,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.6",
+	Version = "3.7",
 	UIVersion = "3.3",
 	DEVICE = "",
 	Description = "Harmony Control",
