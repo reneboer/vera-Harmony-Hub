@@ -1,7 +1,7 @@
 //# sourceURL=J_Harmony.js
 /* harmony Hub Control UI
  Written by R.Boer. 
- V3.7 20 February 2019
+ V3.7 21 February 2019
 
  V3.7 Changes:
 		Clear RemoteID on IP address change.
