@@ -2,8 +2,10 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.7 22 February 2019
+	V3.8 26 February 2019
 	
+	V3.8 Changes:
+				Fix of non fatal error in case no Hue lamps are present.
 	V3.7 Changes:
 				Only obtain Hub remote ID on setup or IP address change.
 				Increased socket timeout from 10 to 30 seconds to allow load large Hub configs.
@@ -175,7 +177,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.7",
+	Version = "3.8",
 	UIVersion = "3.3",
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -2643,12 +2645,12 @@ end
 local function Harmony_LampGetStates()
 	-- Build configured UDN list
 	local childLampUdns = var.Get("PluginHaveLamps")
-	local udnList = ""
-	childLampUdns = childLampUdns..','
-	for udn in childLampUdns:gmatch("([^,]*),") do
-		udnList = udnList..',"'..udn..'"'
-	end
-	if udnList ~= "" then
+	if childLampUdns ~= "" then
+		local udnList = ""
+		childLampUdns = childLampUdns..','
+		for udn in childLampUdns:gmatch("([^,]*),") do
+			udnList = udnList..',"'..udn..'"'
+		end
 		local params = string.format('{"deviceIds":[%s],"forceUpdate":true}',udnList:sub(2))
 		local res, data, cde, msg = Harmony.GetAutomationState(params)
 		if res then
@@ -2664,7 +2666,7 @@ local function Harmony_LampGetStates()
 					end
 				end		
 			else
-				log.Warning("LampGetState no data in response %s",data)
+				log.Warning("LampGetState no data in response %s",tostring(data))
 			end
 		else
 			log.Warning("LampGetState error in response %d, %s",cde,msg)
@@ -3343,10 +3345,9 @@ local function Harmony_CreateChildren()
 				var.SetAttribute("subcategory_num",(lamp.capabilities.xy or lamp.capabilities.hueSat) and 4 or 1,chdev) -- RGB or Bulb
 			end
 		end	
+		-- Get status of configured lamps.
+		Harmony_LampGetStates()
 	end
-
-	-- Get status of configured lamps.
-	Harmony_LampGetStates()
 end
 
 -- In the call back we can conclude a new config from the Hub needs to be requested. This cannot be done from the callback.
