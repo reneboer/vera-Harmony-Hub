@@ -1,52 +1,41 @@
 //# sourceURL=J_Harmony_UI5.js
 /* harmony Hub Control UI json for UI5/UI6
  Written by R.Boer. 
- V3.7 22 February 2019
+ V3.9 20 March 2019
 
+ V3.9 Changes:
+		Clear Domain variable on IP address change.
  V3.7 Changes:
 		Clear RemoteID on IP address change.
-
-		V3.5 Changes:
+ V3.5 Changes:
  		Removed the HTTP Server as option.
 		For UI5 we now have the exception script name.
-
  V3.3 Changes:
 		Added support for automation devices. For now Lamps only.
-
  V3.1 Changes:
 		Fix for hamDeviceSettings
-
  V3.0 Changes:
 		Changed to WebSockets API, no longer need for uid,pwd and polling settings.
 		Activities, Devices and Commands are now in variable, no need for HTTP handler.
-
  V2.20 Changes:
 		Removed syslog support
-
  V2.19 Changes:
 		IP Address is now stored in normal variable, no longer in device IP attribute.
-
  V2.16 Changes:
 		Changed call to request data from Vera Handlers.
-
  V2.15 Changes:
 		New settings option to wait on Hub to fully complete the start of an activity or not.
-
  V2.13-1 Changes:
 		The password input now has the HTML input type password so it won't show.
-
  V2.7 Changes:
 		User can disable plugin. Signal status on control panel.
-
  V2.5 Changes:
 		Can define key-press duration for devices.
 		Layout improvements for native UI and ALTUI.
  		Changed poll and acknowledge settings to drop down selections.
 		Proper JSON returns from LUA.
-
  V2.1 Changes:
 		Added selection for time out.
-
  V2.02 Changes:
 		Removed options for MaxActivity and Device Buttons. Now just fixed.
 		Removed Enable Button Feedback option. Now uses Ok Acknowledge Interval value.
@@ -106,6 +95,7 @@ function hamUpdateSettingsCB(deviceID,varID,newVal) {
 		hamVarSet(deviceID,'HubIPAddress',newVal);
 		hamVarSet(deviceID,'RemoteID','');	// Clear remote ID and other Hub details as with new IP we need to ask for it again.
 		hamVarSet(deviceID,'AccountID','');	
+		hamVarSet(deviceID,'Domain','');	
 		hamVarSet(deviceID,'email','');	
 		break;
 	}
