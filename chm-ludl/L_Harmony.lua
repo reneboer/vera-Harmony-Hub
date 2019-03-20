@@ -2,8 +2,10 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.8 26 February 2019
+	V3.9 20 March 2019
 	
+	V3.9 Changes:
+				Using domain from provision info to open socket.
 	V3.8 Changes:
 				Fix of non fatal error in case no Hue lamps are present.
 	V3.7 Changes:
@@ -160,11 +162,12 @@ Control the harmony Hub
 --]==]
 
 local ltn12 	= require("ltn12")
-local http		= require("socket.http")
+local http	= require("socket.http")
+local url 	= require("socket.url")
 local socket	= require("socket")
-local mime 		= require("mime")
-local lfs 		= require("lfs")
-local json 		= require("dkjson")
+local mime 	= require("mime")
+local lfs 	= require("lfs")
+local json 	= require("dkjson")
 if (type(json) == "string") then
 	luup.log("Harmony warning dkjson missing, falling back to harmony_json", 2)
 	json 		= require("harmony_json")
@@ -938,7 +941,7 @@ local function HarmonyAPI()
 	local last_ping_success = 0
 	local ws_client
 	local message_prefix = ""
-	local hub_data = { remote_id = "", friendly_name = "", email = "", account_id = "" }
+	local hub_data = { remote_id = "", friendly_name = "", email = "", account_id = "", domain = "" }
 	local callBacks = {}
 	local jobStat = JobStatus.NO_JOB
 	local polling_enabled = false
@@ -969,7 +972,8 @@ local function HarmonyAPI()
 --			end
 			return true, 200
 		else
-			local res, prot, hdrs = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
+--			local res, prot, hdrs = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
+			local res, prot, hdrs = ws_client.connect(ipa,port,format("/?domain=%s&hubId=%s",hub_data.domain,hub_data.remote_id))
 			if res then
 				log.Debug("Web-socket to Hub is opened...")
 				last_command_ts = os.time()
@@ -1143,11 +1147,11 @@ local function HarmonyAPI()
 	
 	-- Return the details about the Hub. Get from Hub if not yet known. This is done before the Web-socket is opened.
 	local GetHubDetails = function()
-		if hub_data.remote_id ~= "" then
+		if hub_data.remote_id ~= "" and hub_data.domain ~= "" then
 			return true, hub_data
 		else
 			log.Debug("Retrieving Harmony Hub information.")
-			local url = format('http://%s:%s/',ipa,port)
+			local uri = format('http://%s:%s/',ipa,port)
 --			local request_body = '{"id":1,"cmd":"connect.discoveryinfo?get","params":{}}'	-- 	pre Hub V4.15.250
 			local request_body = '{"id":1,"cmd":"setup.account?getProvisionInfo"}'			-- 	ub V4.15.250
 			local headers = {
@@ -1160,7 +1164,7 @@ local function HarmonyAPI()
 			}
 			local result = {}
 			local bdy,cde,hdrs,stts = http.request{
-				url=url, 
+				url=uri, 
 				method='POST',
 				sink=ltn12.sink.table(result),
 				source = ltn12.source.string(request_body),
@@ -1173,6 +1177,8 @@ local function HarmonyAPI()
 				hub_data.remote_id = json_response['data']['activeRemoteId'] or ""			-- 	Hub V4.15.250
 				hub_data.email = json_response['data']['email'] or ""
 				hub_data.account_id = json_response['data']['accountId'] or ""
+				local pu = url.parse(json_response['data']['discoveryServer'])
+				hub_data.domain = pu.host or "svcs.myharmony.com"
 				log.Debug("Hub details : %s, %s, %s.",hub_data.remote_id,hub_data.account_id,hub_data.email)
 				return true, hub_data
 			else
@@ -1418,12 +1424,13 @@ local function HarmonyAPI()
 	--[[ Initialize module. If called second time it can be used to change the configuration and connect to a different IP address.
 			params: IP address, non-default port to connect to the Hub, last known RemoteID, message prefix and poll flag.
 	--]]
-	local Initialize = function(_ipa, _port, _rem_id, _msg_prf, _poll)
+	local Initialize = function(_ipa, _port, _rem_id, _domain, _msg_prf, _poll)
 		ipa = _ipa or ""
 		port = _port or 8088
 		message_prefix = _msg_prf
 		polling_enabled = _poll
 		hub_data.remote_id = _rem_id
+		hub_data.domain = _domain
 		-- Need to make this global for luup.call_delay use. 
 		_G.HH_send_hold_command = HH_send_hold_command
 		_G.HH_message_loop = HH_message_loop
@@ -3586,6 +3593,7 @@ function Harmony_init(lul_device)
 	var.Default("LastCommandTime", "--")
 	var.Default("RemoteID", "")	
 	var.Default("AccountID", "")	
+	var.Default("Domain", "")	
 	var.Default("FriendlyName", "")	
 	var.Default("hubSwVersion")
 	var.Default("HubConfigVersion", "--")	
@@ -3741,7 +3749,8 @@ function Harmony_init(lul_device)
 	-- If starting with polling disabled, no connection is made with the Hub until the first command is send or polling gets enabled again.
 	local poll = (var.GetNumber("HubPolling") == 1)
 	local remoteID = var.Get("RemoteID")  -- Pass any known remote ID.
-	if not Harmony.Initialize(ipAddress, port, remoteID, "HH"..HData.DEVICE.."#rboer", poll) then 
+	local remoteDomain = var.Get("Domain")  -- Pass any known remote Domain.
+	if not Harmony.Initialize(ipAddress, port, remoteID, remoteDomain, "HH"..HData.DEVICE.."#rboer", poll) then 
 		setStatusIcon(HData.Icon.ERROR)
 		log.Error("Initialize, unable to reconnect on IP address %s.", ipAddress)
 		var.Set("LinkStatus","Hub connection failed. Check IP Address.")
@@ -3750,12 +3759,14 @@ function Harmony_init(lul_device)
 	end
 
 	-- Populate details from the Hub V3.0, First startup is never with polling disabled, so should be ok.
-	if remoteID == "" and poll then
+	if (remoteID == "" or remoteDomain == "") and poll then
 		local res, data, cde, msg = Harmony.GetHubDetails()
 		if res then
 			remoteID = data.remote_id or ""
+			remoteDomain = data.domain or ""
 			var.Set("RemoteID", data.remote_id)	
 			var.Set("AccountID", data.account_id)	
+			var.Set("Domain", data.domain)	
 			var.Set("email", data.email)	
 --			var.Set("FriendlyName", data.friendly_name)	not available in Harmony Hub version 4.15.250
 		else
