@@ -1126,7 +1126,8 @@ local function HarmonyAPI()
 			log.Debug("ws_client.send failed : %s, %s, %s. Retrying once.",tostring(stat),tostring(err),msg)
 			-- Try to reconnect and resend command once so we can keep going
 			if err == 1006 then
-				local res = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
+--				local res = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
+				local res = ws_client.connect(ipa,port,format("/?domain=%s&hubId=%s",hub_data.domain,hub_data.remote_id))
 				if res then
 					local res, stat, err, msg = ws_client.send(payload) 
 					if res then
