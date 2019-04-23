@@ -6,6 +6,7 @@
  V3.9 Changes:
 		Clear Domain variable on IP address change.
 		Fix for missing variable val in hamhtmlAddInput.
+		Fix in hamDevices.
  V3.7 Changes:
 		Clear RemoteID on IP address change.
  V3.5 Changes:
@@ -152,8 +153,8 @@ function hamDevices(deviceID) {
 	} else {	
 		var devList = [];
 		var lampList = [];
-		var devJs = varGet(deviceID,'Devices');
-		var lampJs = varGet(deviceID,'Lamps');
+		var devJs = hamVarGet(deviceID,'Devices');
+		var lampJs = hamVarGet(deviceID,'Lamps');
 		var devHtml = 'Devices not loaded. Check Hub configuration and click the Update Configuration button.';
 		var lampHtml = '';
 		if (devJs != '') {
