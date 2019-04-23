@@ -6,7 +6,7 @@
  V3.9 Changes:
 		Clear Domain variable on IP address change.
 		Fix for missing variable val in hamhtmlAddInput.
-		Fix in hamDevices.
+		Fix in hamDevices and hamDeviceSettings.
  V3.7 Changes:
 		Clear RemoteID on IP address change.
  V3.5 Changes:
@@ -153,6 +153,7 @@ function hamDevices(deviceID) {
 	} else {	
 		var devList = [];
 		var lampList = [];
+		var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
 		var devJs = hamVarGet(deviceID,'Devices');
 		var lampJs = hamVarGet(deviceID,'Lamps');
 		var devHtml = 'Devices not loaded. Check Hub configuration and click the Update Configuration button.';
@@ -201,8 +202,10 @@ function hamDeviceSettings(deviceID) {
 		if (cmdjs != '') {
 			var funcs = JSON.parse(cmdjs).Functions;
 			var actSel = [{ 'value':'','label':'None'}];
-			for (var j=0; j<funcs[i].Commands.length; j++) {
-				actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
+			for (var i=0; i<funcs.length; i++) {
+				for (var j=0; j<funcs[i].Commands.length; j++) {
+					actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
+				}	
 			}	
 			html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
 				'<tr><td colspan="4" class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
