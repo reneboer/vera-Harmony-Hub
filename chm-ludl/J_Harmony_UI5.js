@@ -1,10 +1,11 @@
 //# sourceURL=J_Harmony_UI5.js
 /* harmony Hub Control UI json for UI5/UI6
  Written by R.Boer. 
- V3.9 20 March 2019
+ V3.9 23 April 2019
 
  V3.9 Changes:
 		Clear Domain variable on IP address change.
+		Fix for missing variable val in hamhtmlAddInput.
  V3.7 Changes:
 		Clear RemoteID on IP address change.
  V3.5 Changes:
@@ -227,7 +228,6 @@ function hamDeviceSettings(deviceID) {
 
 
 function hamVarSet(deviceID, varID, newValue, sid) {
-//	set_device_state(deviceID,  HAM_SID, varID, newValue);
 	if (typeof(sid) == 'undefined') { sid = HAM_SID; }
 	set_device_state(deviceID,  sid, varID, newValue, 0);	// Save in user_data so it is there after luup reload
 	set_device_state(deviceID,  sid, varID, newValue, 1); // Save in lu_status so it is directly available for others.
@@ -236,7 +236,6 @@ function hamVarSet(deviceID, varID, newValue, sid) {
 function hamVarGet(deviceID, varID, sid) {
 	if (typeof(sid) == 'undefined') { sid = HAM_SID; }
 	var res = get_device_state(deviceID,sid,varID);
-//	var res = get_device_state(deviceID,sid,varID,1);
 	res = (res !== false && res !== 'false' && res !== null  && typeof(res) !== 'undefined') ? res : '';
 	return res;
 }
@@ -411,9 +410,8 @@ function hamhtmlAddPulldownMultiple(di, lb, vr, values) {
 }
 
 function hamhtmlAddInput(di, lb, si, vr, cb) {
-//	val = (typeof df != 'undefined') ? df : hamVarGet(di,vr,sid);
-//	var typ = (vr.toLowerCase() == 'password') ? 'type="password"' : 'type="text"';
 	var onch = (typeof cb != 'undefined') ? ' onchange="ham'+cb+'(\''+di+'\',\''+vr+'\',this.value);" ' : ' ';
+	var val = hamVarGet(di,vr);
 	var typ = 'type="text"';
 	var html = '<tr><td>'+lb+'</td><td><input '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'"'+onch+'></td></tr>';
 	return html;
