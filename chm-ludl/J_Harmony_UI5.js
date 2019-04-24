@@ -1,52 +1,43 @@
 //# sourceURL=J_Harmony_UI5.js
 /* harmony Hub Control UI json for UI5/UI6
  Written by R.Boer. 
- V3.7 22 February 2019
+ V3.9 23 April 2019
 
+ V3.9 Changes:
+		Clear Domain variable on IP address change.
+		Fix for missing variable val in hamhtmlAddInput.
+		Fix in hamDevices and hamDeviceSettings.
  V3.7 Changes:
 		Clear RemoteID on IP address change.
-
-		V3.5 Changes:
+ V3.5 Changes:
  		Removed the HTTP Server as option.
 		For UI5 we now have the exception script name.
-
  V3.3 Changes:
 		Added support for automation devices. For now Lamps only.
-
  V3.1 Changes:
 		Fix for hamDeviceSettings
-
  V3.0 Changes:
 		Changed to WebSockets API, no longer need for uid,pwd and polling settings.
 		Activities, Devices and Commands are now in variable, no need for HTTP handler.
-
  V2.20 Changes:
 		Removed syslog support
-
  V2.19 Changes:
 		IP Address is now stored in normal variable, no longer in device IP attribute.
-
  V2.16 Changes:
 		Changed call to request data from Vera Handlers.
-
  V2.15 Changes:
 		New settings option to wait on Hub to fully complete the start of an activity or not.
-
  V2.13-1 Changes:
 		The password input now has the HTML input type password so it won't show.
-
  V2.7 Changes:
 		User can disable plugin. Signal status on control panel.
-
  V2.5 Changes:
 		Can define key-press duration for devices.
 		Layout improvements for native UI and ALTUI.
  		Changed poll and acknowledge settings to drop down selections.
 		Proper JSON returns from LUA.
-
  V2.1 Changes:
 		Added selection for time out.
-
  V2.02 Changes:
 		Removed options for MaxActivity and Device Buttons. Now just fixed.
 		Removed Enable Button Feedback option. Now uses Ok Acknowledge Interval value.
@@ -106,6 +97,7 @@ function hamUpdateSettingsCB(deviceID,varID,newVal) {
 		hamVarSet(deviceID,'HubIPAddress',newVal);
 		hamVarSet(deviceID,'RemoteID','');	// Clear remote ID and other Hub details as with new IP we need to ask for it again.
 		hamVarSet(deviceID,'AccountID','');	
+		hamVarSet(deviceID,'Domain','');	
 		hamVarSet(deviceID,'email','');	
 		break;
 	}
@@ -161,8 +153,9 @@ function hamDevices(deviceID) {
 	} else {	
 		var devList = [];
 		var lampList = [];
-		var devJs = varGet(deviceID,'Devices');
-		var lampJs = varGet(deviceID,'Lamps');
+		var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
+		var devJs = hamVarGet(deviceID,'Devices');
+		var lampJs = hamVarGet(deviceID,'Lamps');
 		var devHtml = 'Devices not loaded. Check Hub configuration and click the Update Configuration button.';
 		var lampHtml = '';
 		if (devJs != '') {
@@ -209,8 +202,10 @@ function hamDeviceSettings(deviceID) {
 		if (cmdjs != '') {
 			var funcs = JSON.parse(cmdjs).Functions;
 			var actSel = [{ 'value':'','label':'None'}];
-			for (var j=0; j<funcs[i].Commands.length; j++) {
-				actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
+			for (var i=0; i<funcs.length; i++) {
+				for (var j=0; j<funcs[i].Commands.length; j++) {
+					actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
+				}	
 			}	
 			html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+
 				'<tr><td colspan="4" class="regular"><b>Device #'+deviceID+'</b>&nbsp;&nbsp;&nbsp;'+((deviceObj.name)?deviceObj.name:'')+'</td></tr>'+
@@ -237,7 +232,6 @@ function hamDeviceSettings(deviceID) {
 
 
 function hamVarSet(deviceID, varID, newValue, sid) {
-//	set_device_state(deviceID,  HAM_SID, varID, newValue);
 	if (typeof(sid) == 'undefined') { sid = HAM_SID; }
 	set_device_state(deviceID,  sid, varID, newValue, 0);	// Save in user_data so it is there after luup reload
 	set_device_state(deviceID,  sid, varID, newValue, 1); // Save in lu_status so it is directly available for others.
@@ -246,7 +240,6 @@ function hamVarSet(deviceID, varID, newValue, sid) {
 function hamVarGet(deviceID, varID, sid) {
 	if (typeof(sid) == 'undefined') { sid = HAM_SID; }
 	var res = get_device_state(deviceID,sid,varID);
-//	var res = get_device_state(deviceID,sid,varID,1);
 	res = (res !== false && res !== 'false' && res !== null  && typeof(res) !== 'undefined') ? res : '';
 	return res;
 }
@@ -421,9 +414,8 @@ function hamhtmlAddPulldownMultiple(di, lb, vr, values) {
 }
 
 function hamhtmlAddInput(di, lb, si, vr, cb) {
-//	val = (typeof df != 'undefined') ? df : hamVarGet(di,vr,sid);
-//	var typ = (vr.toLowerCase() == 'password') ? 'type="password"' : 'type="text"';
 	var onch = (typeof cb != 'undefined') ? ' onchange="ham'+cb+'(\''+di+'\',\''+vr+'\',this.value);" ' : ' ';
+	var val = hamVarGet(di,vr);
 	var typ = 'type="text"';
 	var html = '<tr><td>'+lb+'</td><td><input '+typ+' size="'+si+'" id="hamID_'+vr+di+'" value="'+val+'"'+onch+'></td></tr>';
 	return html;

@@ -1,10 +1,12 @@
 //# sourceURL=J_Harmony.js
 /* harmony Hub Control UI
  Written by R.Boer. 
- V3.7 21 February 2019
+ V3.9 20 March 2019
 
+ V3.9 Changes:
+		Clear Domain variable on IP address change.
  V3.7 Changes:
-		Clear RemoteID on IP address change.
+		Clear RemoteID variable on IP address change.
  V3.5 Changes:
  		Removed the HTTP Server as option.
 		Removed remote images option for openLuup as ALTUI handles images properly.
@@ -170,6 +172,7 @@ var Harmony = (function (api) {
 			// When we don't fail initialization we cannot flag device on openLuup.
 			varSet(deviceID,'HubIPAddress',val);
 			varSet(deviceID,'RemoteID','');	// Clear remote ID and other Hub details as with new IP we need to ask for it again.
+			varSet(deviceID,'Domain','');	
 			varSet(deviceID,'AccountID','');	
 			varSet(deviceID,'email','');	
 			// varSet(deviceID,'FriendlyName','');	// No longer available in hub V4.15.250
