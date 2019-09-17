@@ -1,8 +1,10 @@
 //# sourceURL=J_Harmony.js
 /* harmony Hub Control UI
  Written by R.Boer. 
- V3.9 20 March 2019
+ V3.11 17 September 2019
 
+ V3.11 Changes:
+		Fix for Save changes in _UpdateDeviceSettings.
  V3.9 Changes:
 		Clear Domain variable on IP address change.
  V3.7 Changes:
@@ -458,6 +460,7 @@ var Harmony = (function (api) {
 		// If we have changes, update buttons.
 		if (bChanged) {
 			// Wait a second to send the actual action, as it may have issues not saving all data on time.
+			var deviceObj = api.getDeviceObject(deviceID);
 			application.sendCommandSaveUserData(true);
 			api.performLuActionOnDevice(deviceID, HAM_CHSID, 'UpdateDeviceButtons', {});
 			if (getTargetControllerType(deviceObj)) {

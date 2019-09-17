@@ -2,7 +2,7 @@
 <!-- 
 	Module S_Harmony.xml
 	Written by R.Boer. 
-	V3.5, 14 February 2019
+	V3.11, 17 September 2019
 -->
 <scpd xmlns="urn:schemas-upnp-org:service-1-0">
 	<specVersion>
@@ -54,6 +54,14 @@
 		<stateVariable sendEvents="no">
 			<name>LogLevel</name>
 			<dataType>ui1</dataType>
+		</stateVariable>
+		<stateVariable sendEvents="no">
+			<name>SequenceID</name>
+			<dataType>string</dataType>
+		</stateVariable>
+		<stateVariable sendEvents="no">
+			<name>SequenceName</name>
+			<dataType>string</dataType>
 		</stateVariable>
 		<stateVariable sendEvents="no">
 			<name>DeviceID</name>
@@ -117,7 +125,17 @@
 			</argumentList>
 		</action>
 		<action>
-		<name>IssueDeviceCommand</name>
+			<name>IssueSequenceCommand</name>
+			<argumentList>
+				<argument>
+					<name>SequenceID</name>
+					<direction>in</direction>
+					<relatedStateVariable>SequenceID</relatedStateVariable>
+				</argument>
+			</argumentList>
+		</action>
+		<action>
+			<name>IssueDeviceCommand</name>
 			<argumentList>
 				<argument>
 					<name>DeviceID</name>
@@ -142,7 +160,7 @@
 				<argument>
 					<name>newPollFlag</name>
 					<direction>in</direction>
-					<relatedStateVariable>Polling</relatedStateVariable>
+					<relatedStateVariable>HubPolling</relatedStateVariable>
 				</argument>
 			</argumentList>
 		</action>
@@ -221,6 +239,36 @@
 				</argument>
 				<argument>
 					<name>retDeviceName</name>
+					<direction>out</direction>
+					<relatedStateVariable>findResult</relatedStateVariable>
+				</argument>
+			</argumentList>
+		</action>
+		<action>
+			<name>FindSequenceByName</name>
+			<argumentList>
+				<argument>
+					<name>SequenceName</name>
+					<direction>in</direction>
+					<relatedStateVariable>SequenceName</relatedStateVariable>
+				</argument>
+				<argument>
+					<name>retSequenceID</name>
+					<direction>out</direction>
+					<relatedStateVariable>findResult</relatedStateVariable>
+				</argument>
+			</argumentList>
+		</action>
+		<action>
+			<name>FindSequenceByID</name>
+			<argumentList>
+				<argument>
+					<name>SequenceID</name>
+					<direction>in</direction>
+					<relatedStateVariable>SequenceID</relatedStateVariable>
+				</argument>
+				<argument>
+					<name>retSequenceName</name>
 					<direction>out</direction>
 					<relatedStateVariable>findResult</relatedStateVariable>
 				</argument>

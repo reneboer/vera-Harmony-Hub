@@ -2,8 +2,15 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.9 20 March 2019
+	V3.11 17 September 2019
 	
+	V3.11 Changes:
+				Added IssueSequenceCommand to start a sequence.
+				Added GetSequences, FindSequenceByName, FindSequenceByID commands.
+				Fix for Hue RGB lights.
+				Child device attributes now set at device creation, not after and at each startup. Requires latest development brance for openLuup.
+	V3.10 Changes:
+				Parameter type correction for Harmony_SetHubPolling to fix openLuup issue.
 	V3.9 Changes:
 				Using domain from provision info to open socket.
 	V3.8 Changes:
@@ -162,12 +169,12 @@ Control the harmony Hub
 --]==]
 
 local ltn12 	= require("ltn12")
-local http	= require("socket.http")
-local url 	= require("socket.url")
+local http		= require("socket.http")
+local url 		= require("socket.url")
 local socket	= require("socket")
-local mime 	= require("mime")
-local lfs 	= require("lfs")
-local json 	= require("dkjson")
+local mime 		= require("mime")
+local lfs 		= require("lfs")
+local json 		= require("dkjson")
 if (type(json) == "string") then
 	luup.log("Harmony warning dkjson missing, falling back to harmony_json", 2)
 	json 		= require("harmony_json")
@@ -180,7 +187,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.9",
+	Version = "3.11",
 	UIVersion = "3.3",
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -393,8 +400,8 @@ local taskHandle = -1
 	-- Write to file for detailed analisys
 	local function _logfile(...)
 		if def_file then
-			local fh = io.open("/tmp/log/harmony.log","a")
-			local msg = format(...) or "no text"
+			local fh = io.open("/tmp/harmony.log","a")
+			local msg = os.date("%d/%m/%Y %X") .. ": " .. prot_format(-1,...)
 			fh:write(msg)
 			fh:write("\n")
 			fh:close()
@@ -954,6 +961,7 @@ local function HarmonyAPI()
 
 	-- Open web-socket to Hub and kick-off message loop if polling is active.
 	local Connect = function()
+--log.LogFile("Calling Connect.")
 		if ((ipa or "") == "") then 
 			log.Error("Connect, no IP Address specified ") 
 			return nil, nil, 400, "IP address missing" 
@@ -964,6 +972,7 @@ local function HarmonyAPI()
 		end	
 		if ws_client.is_connected() then
 			log.Debug("We should have web-socket open.")
+--log.LogFile("We should have web-socket open.")
 -- Assume this polling still is active
 --			if polling_enabled then
 --				-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
@@ -975,10 +984,12 @@ local function HarmonyAPI()
 --			local res, prot, hdrs = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
 			local res, prot, hdrs = ws_client.connect(ipa,port,format("/?domain=%s&hubId=%s",hub_data.domain,hub_data.remote_id))
 			if res then
+--log.LogFile("We opened web-socket.")
 				log.Debug("Web-socket to Hub is opened...")
 				last_command_ts = os.time()
 				if polling_enabled then
 					-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
+--log.LogFile("Kick-off polling loops")
 					luup.call_delay("HH_ping_loop",30)
 					luup.call_delay("HH_message_loop",1)
 				end
@@ -1026,6 +1037,7 @@ local function HarmonyAPI()
 			while ws_client.message_waiting() do
 				local response, op = ws_client.receive()
 				if response then
+--log.LogFile("response from hub ".. response)				
 					local data, _, errMsg = json.decode(response)
 					if data then
 						HH_HandleCallBack(data)
@@ -1044,11 +1056,15 @@ local function HarmonyAPI()
 	local HH_ping_loop = function()
 		if polling_enabled then
 			local next_poll = os.difftime(os.time(),last_command_ts)
+if next_poll == 0 then
+--log.LogFile("last ping was zero (%d) seconds ago, is it double?", next_poll)
+end			
 			if next_poll < 45 then 
 				next_poll = 45 - next_poll
 			else
 				next_poll = 45 
 			end
+--log.LogFile("Scheduling next ping loop call in %d seconds.", next_poll)
 			luup.call_delay("HH_ping_loop",next_poll)
 			if next_poll >= 45 then
 				log.Debug("Keep hub connection open")
@@ -1058,14 +1074,17 @@ local function HarmonyAPI()
 				else
 					if os.difftime(os.time(),last_ping_success) > 600 then
 						log.Debug("Failed to ping hub for more than five minutes, trying to re-open connection.")
+--log.LogFile("Failed to ping hub for more than five minutes, trying to re-open connection.")
 						Close()
 						Connect()
 					else	
 						log.Debug("Failed to ping hub.")
+--log.LogFile("Failed to ping hub.")
 					end	
 				end	
 			end	
 		else
+--log.LogFile("End of polling, closed connection to Hub.")
 			-- End of polling, close connection to Hub
 			Close()
 			log.Debug("End of polling, closed connection to Hub.")
@@ -1272,6 +1291,40 @@ local function HarmonyAPI()
 		end
 	end
 
+	--[[ Send a sequence command.
+			Params: sequence ID to send
+	--]]
+	local IssueSequenceCommand = function(sequenceId)
+		local res, data, cde, msg = nil, nil, 400, ""
+		local id = sequenceId or ""
+		local prs = prsMap.press .. prsMap.release
+		if id ~= "" then
+			log.Debug("Sending Sequence Command %s.", id)
+			local action = format('{\\"sequenceId\\":\\"%s\\"}', id)
+			local params = format('{"status":"%s","timestamp":0,"verb":"render","action":"%s"}',prs,action)
+			-- First key-press down command
+			jobStat = JobStatus.IN_PROGRESS
+			if not polling_enabled then Connect() end
+			-- For Hold action sequesce we must use the same message ID. Lets use HoldAction with command.
+			-- Depends on device if we get a response. Assume none.
+			local res1, data1, cde1, msg1 = send_request("vnd.logitech.harmony\\/vnd.logitech.harmony.engine?holdAction", params, "HOLD", false)
+			if res1 then 
+				res = true
+				data = 200
+			else	
+				res = nil
+				data = nil
+				cde = cde1 or 503
+				msg = msg1 or "No response from hub."
+			end
+			jobStat = JobStatus.NO_JOB
+			if not polling_enabled then Close() end
+		else
+			msg = "Missing parameters, Sequence ID"
+		end
+		return res, data, cde, msg
+	end
+
 	--[[ Send start hold action command. 
 			Params : device ID to send to, command to send, duration to hold the key-press, key-press action.
 			Return true on success, false with error code and message if not.
@@ -1391,9 +1444,11 @@ local function HarmonyAPI()
 	-- When called with true then the connection to the Hub will be kept open
 	-- Can be toggled at any time.
 	local SetHubPolling = function(poll)
+--log.LogFile("Entering SetHubPolling with value %s.", tostring(poll))
 		if polling_enabled == poll then return true, 200 end
 		polling_enabled = poll
 		if poll then
+--log.LogFile("Polling is started again")
 			-- re-open the connection
 			local res, data, cde, msg = Connect()
 			if res then
@@ -1469,6 +1524,7 @@ local function HarmonyAPI()
 		GetCurrentActivtyID = GetCurrentActivtyID,
 		StartActivity = StartActivity,
 		ChangeChannel = ChangeChannel,
+		IssueSequenceCommand = IssueSequenceCommand,
 		IssueDeviceCommand = IssueDeviceCommand,
 		SetHubPolling = SetHubPolling,
 		GetHubPolling = GetHubPolling,
@@ -2117,12 +2173,11 @@ function Harmony_FindActivityByName(name)
 			var.Set("findResult", name)  -- Need variable to have return value in call_action
 			return true, name 
 		end
-		local acts = var.Get("Activities")
-		local act_js = json.decode(acts)
-		for i=1,#act_js.activities do
-			if act_js.activities[i].Activity == name then
-				var.Set("findResult", act_js.activities[i].ID)  -- Need variable to have return value in call_action
-				return true, act_js.activities[i].ID
+		local data = json.decode(var.Get("Activities"))
+		for i=1,#data.activities do
+			if data.activities[i].Activity == name then
+				var.Set("findResult", data.activities[i].ID)  -- Need variable to have return value in call_action
+				return true, data.activities[i].ID
 			end
 		end 
 	end	
@@ -2133,12 +2188,11 @@ end
 -- Find the activity with the id and return the matching activity name
 function Harmony_FindActivityByID(id)
 	if id then
-		local acts = var.Get("Activities")
-		local act_js = json.decode(acts)
-		for i=1,#act_js.activities do
-			if act_js.activities[i].ID == id then
-				var.Set("findResult", act_js.activities[i].Activity)  -- Need variable to have return value in call_action
-				return true, act_js.activities[i].Activity
+		local data = json.decode(var.Get("Activities"))
+		for i=1,#data.activities do
+			if data.activities[i].ID == id then
+				var.Set("findResult", data.activities[i].Activity)  -- Need variable to have return value in call_action
+				return true, data.activities[i].Activity
 			end
 		end 
 	end	
@@ -2154,12 +2208,11 @@ function Harmony_FindDeviceByName(name)
 			var.Set("findResult", name)  -- Need variable to have return value in call_action
 			return true, name 
 		end
-		local devs = var.Get("Devices")
-		local dev_js = json.decode(devs)
-		for i=1,#dev_js.devices do
-			if dev_js.devices[i].Device == name then
-				var.Set("findResult", dev_js.devices[i].ID)  -- Need variable to have return value in call_action
-				return true, dev_js.devices[i].ID
+		local data = json.decode(var.Get("Devices"))
+		for i=1,#data.devices do
+			if data.devices[i].Device == name then
+				var.Set("findResult", data.devices[i].ID)  -- Need variable to have return value in call_action
+				return true, data.devices[i].ID
 			end
 		end 
 	end	
@@ -2170,12 +2223,46 @@ end
 -- Find the device with the id and return the matching device name
 function Harmony_FindDeviceByID(id)
 	if id then
-		local devs = var.Get("Devices")
-		local dev_js = json.decode(devs)
-		for i=1,#dev_js.devices do
-			if dev_js.devices[i].ID == id then
-				var.Set("findResult", dev_js.devices[i].Device)  -- Need variable to have return value in call_action
-				return true, dev_js.devices[i].Device
+		local data = json.decode(var.Get("Devices"))
+		for i=1,#data.devices do
+			if data.devices[i].ID == id then
+				var.Set("findResult", data.devices[i].Device)  -- Need variable to have return value in call_action
+				return true, data.devices[i].Device
+			end
+		end 
+	end	
+	var.Set("findResult", "")  -- Need variable to have return value in call_action
+	return false, ""
+end
+
+-- Find the sequecene with the name and return the matching sequecene ID
+function Harmony_FindSequenceByName(name)
+	if name then
+		-- If we get a number, then assume it is an ID already
+		if tonumber(name,10) then 
+			var.Set("findResult", name)  -- Need variable to have return value in call_action
+			return true, name 
+		end
+		local data = json.decode(var.Get("Sequences"))
+		for i=1,#data.sequences do
+			if data.sequences[i].Name == name then
+				var.Set("findResult", data.sequences[i].ID)  -- Need variable to have return value in call_action
+				return true, data.sequences[i].ID
+			end
+		end 
+	end	
+	var.Set("findResult", "")  -- Need variable to have return value in call_action
+	return false, ""
+end
+
+-- Find the sequecene with the id and return the matching sequecene name
+function Harmony_FindSequenceByID(id)
+	if id then
+		local data = json.decode(var.Get("Sequences"))
+		for i=1,#data.sequences do
+			if data.sequences[i].ID == id then
+				var.Set("findResult", data.sequences[i].Name)  -- Need variable to have return value in call_action
+				return true, data.sequences[i].Name
 			end
 		end 
 	end	
@@ -2205,9 +2292,11 @@ end
 -- Update the polling flag. If called with "1" then the connection with the Hub will be kept open, else it will close after each command.
 -- If Polling is on and turned off, wait for the hub to be off (current activity == -1)
 function Harmony_SetHubPolling(poll_flg)
-	if type(poll_flg) == "string" then poll_flg = (poll_flg == "1") end
+	local pf = tonumber(poll_flg,10) or 0
+--log.LogFile("Entering Harmony_SetHubPolling with value %s.",tostring(pf))
 	local change_poll = true
-	if (not poll_flg) and Harmony.GetHubPolling() then
+	pf = (pf == 1)
+	if (not pf) and Harmony.GetHubPolling() then
 		-- Want turn off polling, make sure all is powerd off.
 		local actid = var.GetNumber("CurrentActivityID")
 		if actid ~= -1 then
@@ -2218,8 +2307,9 @@ function Harmony_SetHubPolling(poll_flg)
 		end	
 	end
 	if change_poll then
-		Harmony.SetHubPolling(poll_flg)
-		if poll_flg then
+--log.LogFile("Changing polling to value %s.",tostring(pf))
+		Harmony.SetHubPolling(pf)
+		if pf then
 			log.Debug("Turning on polling")
 			var.Set("HubPolling", 1)
 		else	
@@ -2249,6 +2339,8 @@ function Harmony_UpdateConfigurations()
 			dataTab.activities[i].Activity = data.activity[i].label
 		end
 		var.Set("Activities", json.encode(dataTab))
+		dataTab = nil
+
 		-- Get devices 
 		dataTab = {}
 		dataTab.devices = {}
@@ -2261,6 +2353,7 @@ function Harmony_UpdateConfigurations()
 			dataTab.devices[i].Manufacturer = data.device[i].manufacturer
 		end
 		var.Set("Devices", json.encode(dataTab))
+		dataTab = nil
 		-- Get commands for child devices
 		for k, v in pairs(luup.devices) do
 			if var.GetAttribute ('id_parent', k ) == HData.DEVICE then
@@ -2296,6 +2389,18 @@ function Harmony_UpdateConfigurations()
 				end
 			end
 		end	
+		dataTab = nil
+		-- Get sequences
+		dataTab = {}
+		dataTab.sequences = {}
+		log.Debug("Number of sequences found : %d.",#data.sequence)
+		for i = 1, #data.sequence do
+			dataTab.sequences[i] = {}
+			dataTab.sequences[i].ID = data.sequence[i].id
+			dataTab.sequences[i].Name = data.sequence[i].name
+		end
+		var.Set("Sequences", json.encode(dataTab))
+		dataTab = nil
 		-- Content, used for cmd proxy.resource?get
 		if data.content.householdUserProfileUri then
 			var.Set("householdUserProfileUri", data.content.householdUserProfileUri)
@@ -2432,6 +2537,40 @@ function Harmony_GetConfig(cmd, id, devID)
 		end
 		return res, data, cde, msg
 	end
+end
+
+-- Send IssueSequenceCommand to Harmony Hub
+-- Input: sequenceID = sequence ID
+-- Output: True on success
+function Harmony_IssueSequenceCommand(seq)
+	if (HData.Plugin_Disabled == true) then
+		log.Warning("IssueSequenceCommand : Plugin disabled.")
+		return nil, nil, 503,"Plugin disabled."
+	end
+	if (GetBusy()) then 
+		log.Warning("IssueSequenceCommand communication is busy")
+		return nil, nil, 307,"Communication is busy."
+	end
+	local dur = tonumber(devDur) or 0
+	if (seq ~= "") then 
+		SetBusy(true, true)
+		local res1, sequenceId = Harmony_FindSequenceByName(seq)
+		local res, data, cde, msg = nil, nil, 404, ""
+		log.Debug("IssueSequenceCommand, sequenceID : %s.",sequenceId)
+		if res1 then
+			res, data, cde, msg = Harmony.IssueSequenceCommand(sequenceId)
+			if res then
+				SetLastCommand("IssueSequenceCommand")
+			end	
+		else
+			cde = 404
+			msg = "not a valid sequenceID: "..(seq or "missing")
+		end
+		SetBusy(false, true)
+		return res, data, cde, msg
+	else
+		return nil, nil, 404, "no SequenceID specified"
+	end	
 end
 
 -- Send IssueDeviceCommand to Harmony Hub
@@ -2590,53 +2729,39 @@ function Harmony_PowerOff()
 	return res, data, cde, msg
 end
 
+-- Update the Vera status based on status report from Hub.
 local function Harmony_UpdateLampStatus(chdev, data)
 	-- Set current status
 	local dv = data
 	if dv then
-		log.Debug("UpdateLampStatus; device, %s",chdev, json.encode(dv))
-		if dv.on ~= nil then
-			local tar = dv.on and 1 or 0
-			var.Set("Target", tar, HData.SIDS.SP, chdev)
-			var.Set("Status", tar, HData.SIDS.SP, chdev)
-			if dv.brightness == nil then
-				local usw = var.GetNumber("UserSuppliedWattage", HData.SIDS.EM, chdev)
-				if usw > 0 then
-					var.Set("Watts", usw * tar, HData.SIDS.EM, chdev)
-				end
-			end
-		end	
+		log.Debug("UpdateLampStatus; device %d, %s", chdev, json.encode(dv))
+		local status = (dv.on == true) and 1 or 0
+		local bri = math.ceil(100*(dv.brightness or 0)/255)
+		if (not dv.on) then bri = 0 end
+		var.Set("Target", status, HData.SIDS.SP, chdev)
+		var.Set("Status", status, HData.SIDS.SP, chdev)
+		if (dv.on) then var.Set("LoadLevelLast", bri, HData.SIDS.DIM, chdev) end
+		var.Set("LoadLevelTarget", bri, HData.SIDS.DIM, chdev)
+		var.Set("LoadLevelStatus", bri, HData.SIDS.DIM, chdev)
+		local usw = var.GetNumber("UserSuppliedWattage", HData.SIDS.EM, chdev)
+		if usw > 0 then var.Set("Watts", (usw * bri) / 100, HData.SIDS.EM, chdev) end
 		if dv.color then
 			local w,d,r,g,b=0,0,0,0,0
 			if dv.color.mode == "xy" then
-				r,g,b = utils.CieToRgb(dv.color.xy.x,dv.color.xy.y,dv.brightness)
-			elseif dv.color.mode == "hueSat" then
+				r,g,b = utils.CieToRgb(dv.color.xy.x,dv.color.xy.y,(dv.on and dv.brightness) or nil)
+			elseif dv.color.mode == "hs" then
 				r,g,b = utils.HsbToRgb(dv.color.hueSat.hue,dv.color.hueSat.sat,dv.brightness)
+			elseif dv.color.mode == "ct" then
+				log.Warning("LampGetState unknown color mode %s.",json.encode(dv.color))
+				w = -1
 			else
-				log.Warning("LampGetState unknown color mode %s.",dv.color)
+				log.Warning("LampGetState unknown color mode %s.",json.encode(dv.color))
 				w = -1
 			end
 			if w ~= -1 then
 				var.Set("CurrentColor", string.format("0=%s,1=%s,2=%s,3=%s,4=%s",w,d,r,g,b), HData.SIDS.COL, chdev)
 			end	
 		end
-		if dv.brightness then
-			local bri = math.floor(100*dv.brightness/255)
-			var.Set("LoadLevelLast", bri, HData.SIDS.DIM, chdev)
-			if dv.on then
-				var.Set("LoadLevelTarget", bri, HData.SIDS.DIM, chdev)
-				var.Set("LoadLevelStatus", bri, HData.SIDS.DIM, chdev)
-				local usw = var.GetNumber("UserSuppliedWattage", HData.SIDS.EM, chdev)
-				if usw > 0 then
-					var.Set("Watts", (usw * bri) / 100, HData.SIDS.EM, chdev)
-				end
-			else
-				-- When off load levels turn to zero.
-				var.Set("LoadLevelTarget", 0, HData.SIDS.DIM, chdev)
-				var.Set("LoadLevelStatus", 0, HData.SIDS.DIM, chdev)
-				var.Set("Watts", 0, HData.SIDS.EM, chdev)
-			end
-		end	
 	else
 		log.Warning("UpdateLampStatus; No data.")
 	end
@@ -2705,24 +2830,24 @@ function Harmony_LampSetTarget(chdev,newTarget)
 			var.Set("Target", newTarget, HData.SIDS.SP, chdev)
 			var.Set("Status", newTarget, HData.SIDS.SP, chdev)
 		end	
-		res, data, cde, msg = Harmony_LampSetState(chdev,string.format('{"on": %s}',(newTarget > 0) and "true" or "false"))
-		local model = var.Get("model",HData.SIDS.CHILD, chdev)
+		res, data, cde, msg = Harmony_LampSetState(chdev,string.format('{"on": %s}',tostring(newTarget > 0)))
+		if res then
+			SetLastCommand("SetTarget")
+		else
+			log.Error("SetTarget, ERROR %d, %s.",cde,msg)
+		end	
+		SetBusy(false,true)
 	else
 		-- See if we have a last target, if not, go to 100%
 		local newLoadLevelTarget = var.GetNumber("LoadLevelLast", HData.SIDS.DIM, chdev)
 		if newLoadLevelTarget == 0 then newLoadLevelTarget = 100 end
 		res, data, cde, msg = Harmony_LampSetLoadLevelTarget(chdev, (newTarget>0) and newLoadLevelTarget or 0,true)
 	end
-	if res then
-		SetLastCommand("SetTarget")
-	else
-		log.Error("SetTarget, ERROR %d, %s.",cde,msg)
-	end	
-	SetBusy(false,true)
 	return true
 end
 
 -- Send Lamp SetLoadLevelTarget to Harmony Hub. Thanks amg0.
+-- Note that Vera might send on/off to here directly for dimmer device types.
 function Harmony_LampSetLoadLevelTarget(chdev,newLoadLevelTarget,chainedCall)
 	if not chainedCall then
 		if (HData.Plugin_Disabled == true) then
@@ -2733,16 +2858,15 @@ function Harmony_LampSetLoadLevelTarget(chdev,newLoadLevelTarget,chainedCall)
 			log.Warning("SetLoadLevelTarget communication is busy")
 			return nil, nil, 307,"Communication is busy."
 		end
+		SetBusy(true, true)
 	end	
 	log.Debug("SetLoadLevelTarget for %s, newLoadLevelTarget %s",chdev,newLoadLevelTarget)
 	newLoadLevelTarget = tonumber(newLoadLevelTarget)
 	local res, data, cde, msg
 	local status = var.GetNumber("LoadLevelStatus", HData.SIDS.DIM, chdev)
 	if (status ~= newLoadLevelTarget) then
-		if not chainedCall then	SetBusy(true, true) end
 		local bri = math.floor(255*newLoadLevelTarget/100)
-		if (bri==0)  then
---			res, data, cde, msg = Harmony_LampSetState(chdev,'{"on":false,"brightness":0}}')
+		if (bri == 0)  then
 			res, data, cde, msg = Harmony_LampSetState(chdev,'{"on":false}')
 		else
 			local val = (newLoadLevelTarget ~= 0) 
@@ -2761,11 +2885,11 @@ function Harmony_LampSetLoadLevelTarget(chdev,newLoadLevelTarget,chainedCall)
 		else
 			log.Error("SetLoadLevelTarget, ERROR %d, %s.",cde,msg)
 		end	
-		if not chainedCall then SetBusy(false,true) end
 	else
 		-- No changes
 		log.Debug("SetLoadLevelTarget no change")
 	end
+	SetBusy(false,true)
 	return true
 end
 
@@ -2782,10 +2906,11 @@ function Harmony_LampSetColorRGB(chdev,newRGBColor)
 	SetBusy(true, true)
 	local parts = utils.Split(newRGBColor)
 	local x,y = utils.RgbToCie(parts[1], parts[2], parts[3])
+	local on = (var.GetNumber("Status", HData.SIDS.SP, chdev) == 1)
 	log.Debug("SetColorRGB for %s, newRGBColor %s => x:%s y:%s",chdev,newRGBColor, tostring(x), tostring(y))
 	local newValue = var.Get("LoadLevelStatus", HData.SIDS.DIM, chdev)
 	local bri = math.floor(255*newValue/100)
-	local params = string.format('{"on":true,"brightness":%d,"color":{"xy":{"x":%1.4f,"y":%1.4f},"mode":"xy"}}',bri,x,y)
+	local params = string.format('{"color":{"xy":{"x":%1.4f,"y":%1.4f},"mode":"xy"}}',x,y)
 	local res, data, cde, msg = Harmony_LampSetState(chdev,params)
 	if res then
 		SetLastCommand("SetColorRGB")
@@ -2808,6 +2933,7 @@ function Harmony_LampSetColor(chdev,newColor)
 	end
 	log.Debug("SetColor for %s, newColor %s",chdev,newColor)
 	SetBusy(true, true)
+	local on = (var.GetNumber("Status", HData.SIDS.SP, chdev) == 1)
 	local warmcool = string.sub(newColor, 1, 1)
 	local value = tonumber(string.sub(newColor, 2))
 	local kelvin = math.floor((value*3500/255)) + ((warmcool=="D") and 5500 or 2000)
@@ -2815,7 +2941,7 @@ function Harmony_LampSetColor(chdev,newColor)
 	local newValue = var.Get("LoadLevelStatus", HData.SIDS.DIM, chdev)
 	local bri = math.floor(255*newValue/100)
 	log.Debug("UserSetColor target: %s => bri:%s ct:%s",newColorTarget,bri,mired)
-	local res, data, cde, msg = Harmony_LampSetState(chdev,string.format('{"on":true,"brightness":%d,"ct":%s}',bri, mired))
+	local res, data, cde, msg = Harmony_LampSetState(chdev,string.format('{"ct":%s}', mired))
 	if res then
 		SetLastCommand("SetColor")
 	else
@@ -2955,6 +3081,10 @@ function HTTP_Harmony (lul_request, lul_parameters)
 			res, data = Harmony_FindDeviceByName(cmdp1) 
 		elseif (cmd == 'find_device_by_id') then 
 			res, data = Harmony_FindDeviceByID(cmdp1) 
+		elseif (cmd == 'find_sequence_by_name') then 
+			res, data = Harmony_FindSequenceByName(cmdp1) 
+		elseif (cmd == 'find_sequence_by_id') then 
+			res, data = Harmony_FindSequenceByID(cmdp1) 
 		elseif (cmd == 'issue_device_command') then 
 			res, data, cde, msg = Harmony_IssueDeviceCommand(cmdp1, cmdp2, cmdp3) 
 		else 
@@ -3144,16 +3274,16 @@ local function Harmony_SyncDevices(childDevices)
 	local remicons = (var.GetNumber('RemoteImages') == 1)
 	childDeviceIDs = childDeviceIDs .. ','
 	for deviceID in childDeviceIDs:gmatch("([^,]*),") do
-		local desc = nil
+		local device = nil
 		local altid = 'HAM'..HData.DEVICE..'_'..deviceID
 		-- Find matching Device definition
 		for i = 1, #Devices_t.devices do 
 			if (Devices_t.devices[i].ID == deviceID) then
-				desc = Devices_t.devices[i].Device
+				device = Devices_t.devices[i]
 				break
 			end	
 		end
-		if desc then
+		if device then
 			-- See if the device specific files already exist, if not copy from base and adapt. No longer needed on openLuup.
 			local fname = 'D_HarmonyDevice'
 			if not HData.onOpenLuup then
@@ -3176,7 +3306,10 @@ local function Harmony_SyncDevices(childDevices)
 				HData.SIDS.CHILD..",HubName="..var.GetAttribute("name"),
 				HData.SIDS.CHILD..",DeviceCommands=",
 			}
-			local name = "HRM: " .. string.gsub(desc, "%s%(.+%)", "")
+			if device.Model then vartable[#vartable+1] = ",model="..device.Model end
+			if device.Manufacturer then  vartable[#vartable+1] = ",manufacturer="..device.Manufacturer end
+			
+			local name = "HRM: " .. string.gsub(device.Device, "%s%(.+%)", "")
 			log.Debug("Child device id " .. altid .. " (" .. name .. "), number " .. deviceID)
 			luup.chdev.append(
 		    	HData.DEVICE, 				-- parent (this device)
@@ -3232,6 +3365,10 @@ local function Harmony_SyncLamps(childDevices)
 				HData.SIDS.CHILD..",UDN="..udn,
 				HData.SIDS.CHILD..",name="..lamp.name,
 				HData.SIDS.CHILD..",capabilities="..json.encode(lamp.capabilities),
+				",model="..(lamp.model or "unknown"),
+				",manufacturer="..(lamp.manufacturer or "unknown"),
+				",category_num=2",
+				",subcategory_num="..((lamp.capabilities.xy or lamp.capabilities.hueSat) and 4 or 1), -- RGB or Bulb
 				HData.SIDS.SP..",Status=0",
 				HData.SIDS.SP..",Target=0"
 			}
@@ -3254,6 +3391,7 @@ local function Harmony_SyncLamps(childDevices)
 			-- See if lamp is a monochrome or Color light
 			if lamp.capabilities.xy or lamp.capabilities.hueSat then
 				vartable[#vartable+1] = HData.SIDS.COL..",CurrentColor='0=0,1=0,2=0,3=0,4=0'"
+				vartable[#vartable+1] = ",device_json=D_DimmableRGBOnlyLight1.json"
 				fname = "D_DimmableRGBLight1"
 				dtype="urn:schemas-upnp-org:device:DimmableRGBLight:1"
 			end
@@ -3304,24 +3442,6 @@ local function Harmony_CreateChildren()
 						log.DeviceMessage(chdev, true, 0, "No Commands configured.")
 					end	
 				end	
-				local devConfigs = var.Get("Devices")
-				-- If nothing defined, we never could pull anything from the Hub. Just stop.
-				if devConfigs ~= "" then
-					local Devices_t = json.decode(devConfigs)
-					local device = nil
-					-- Find matching Lamp definition
-					for i = 1, #Devices_t.devices do 
-						if Devices_t.devices[i].ID == deviceID then
-							device = Devices_t.devices[i]
-							break
-						end	
-					end
-					if device then
-						-- Set attributes
-						if device.Model then var.SetAttribute("model",device.Model,chdev) end
-						if device.Manufacturer then var.SetAttribute("manufacturer",device.Manufacturer,chdev) end
-					end	
-				end
 			end
 		end
 	else
@@ -3332,27 +3452,6 @@ local function Harmony_CreateChildren()
 	local childLampUdns = var.Get("PluginHaveLamps")
 	local lampConfigs = var.Get("Lamps")
 	if childLampUdns ~= "" and lampConfigs ~= "" and lampConfigs ~= "-" then 
-		-- Get the list of configured lamps.
-		childLampUdns = childLampUdns .. ','
-		local Devices_t = json.decode(lampConfigs)
-		for udn in childLampUdns:gmatch("([^,]*),") do
-			local lamp = nil
-			-- Find matching Lamp definition
-			for i = 1, #Devices_t.lamps do 
-				if Devices_t.lamps[i].udn == udn then
-					lamp = Devices_t.lamps[i]
-					break
-				end	
-			end
-			local chdev = Harmony_FindLamp(udn)
-			if chdev and lamp then
-				-- Set attributes
-				var.SetAttribute("model",lamp.model,chdev)
-				var.SetAttribute("manufacturer",lamp.manufacturer,chdev)
-				var.SetAttribute("category_num",2,chdev) -- Light
-				var.SetAttribute("subcategory_num",(lamp.capabilities.xy or lamp.capabilities.hueSat) and 4 or 1,chdev) -- RGB or Bulb
-			end
-		end	
 		-- Get status of configured lamps.
 		Harmony_LampGetStates()
 	end
@@ -3486,6 +3585,10 @@ local function Harmony_CB_StartActivityFinished(cmd,data)
 		return "No data"
 	end
 end
+local function Harmony_CB_SequenceFinished(cmd,data)
+	log.Debug("harmony.engine?sequenceFinished.")
+	return "OK"
+end
 local function Harmony_CB_AutomationStateNotify(cmd,data)
 	log.Debug("Harmony_CB_AutomationStateNotify start.")
 	local dv = data
@@ -3494,6 +3597,7 @@ local function Harmony_CB_AutomationStateNotify(cmd,data)
 			local chdev = Harmony_FindLamp(udn)
 			if chdev then
 				log.Debug("automation.state?notify: device %s, udn %s.",chdev,udn)
+				log.Debug("automation.state?notify: %s",json.encode(dt))
 				Harmony_UpdateLampStatus(chdev,dt)
 			else
 				log.Log("AutomationStateNotify; Unconfigured automation device %s.",udn)
@@ -3543,7 +3647,7 @@ function Harmony_init(lul_device)
 	Harmony = HarmonyAPI()
 	var.Initialize(HData.SIDS.MODULE, HData.DEVICE)
 	var.Default("LogLevel", 1)
-	log.Initialize(HData.Description, var.GetNumber("LogLevel"))
+	log.Initialize(HData.Description, var.GetNumber("LogLevel") + 100)
 	utils.Initialize()
 
 	SetBusy(true,false)
@@ -3599,6 +3703,7 @@ function Harmony_init(lul_device)
 	var.Default("hubSwVersion")
 	var.Default("HubConfigVersion", "--")	
 	var.Default("householdUserProfileUri")	
+	var.Default("Sequences")	
 	var.Default("Activities")	
 	var.Default("Devices")	
 	var.Default("Lamps")	
@@ -3805,6 +3910,7 @@ function Harmony_init(lul_device)
 	Harmony.RegisterCallBack("vnd.logitech.connect/vnd.logitech.statedigest?get", Harmony_CB_StateDigestNotify)
 	Harmony.RegisterCallBack("harmony.engine?startActivity", Harmony_CB_StartActivity)
 	Harmony.RegisterCallBack("harmony.engine?startActivityFinished", Harmony_CB_StartActivityFinished)
+	Harmony.RegisterCallBack("vnd.logitech.harmony/vnd.logitech.harmony.engine?sequenceFinished", Harmony_CB_SequenceFinished)
 	Harmony.RegisterCallBack("automation.state?notify", Harmony_CB_AutomationStateNotify)
 	
 	-- Don't do this on openLuup as there is no reload needed after changing button config, so message won't go away.

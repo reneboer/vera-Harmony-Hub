@@ -2,7 +2,7 @@
 <!-- 
 	Module I_Harmony.xml
 	Written by R.Boer. 
-	V3.7, 22 February 2019
+	V3.11, 17 September 2019
 -->
 <implementation>
 	<specVersion>
@@ -128,6 +128,20 @@
 		</action>
 		<action>
 			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>FindSequenceByName</name>
+			<run>
+				Harmony_FindSequenceByName(lul_settings.SequenceName or "")
+			</run>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>FindSequenceByID</name>
+			<run>
+				Harmony_FindSequenceByID(lul_settings.SequenceID or "0")
+			</run>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 			<name>UpdateButtons</name>
 			<job>
 				local res, data, cde, msg = Harmony_UpdateButtons(lul_device)
@@ -138,6 +152,19 @@
 				return 4,nil
 			</job>
 			<jobname>UpdateButtons</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>IssueSequenceCommand</name>
+			<job>
+				local res, data, cde, msg = Harmony_IssueSequenceCommand(lul_settings.SequenceID or "")
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3, nil end
+				end	
+				return 4,nil
+			</job>
+			<jobname>IssueSequenceCommand</jobname>
 		</action>
 		<action>
 			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
