@@ -2518,14 +2518,16 @@ function Harmony_GetConfig(cmd, id, devID)
 			end
 			log.Debug("Looked up missing devID for %s, found %s",tostring(id),tostring(devID or "nil"))
 		end
-		log.Debug("list_device_commands for %s / %s",tostring(id),tostring(devID or "nil"))
 		local commands = ""
 		if not devID then
 			log.Debug("No child device found, getting full config for device %s",tostring(id))
 			-- Not a child device, do direct request and lookup.
+			-- Is dup of part of Harmony_UpdateConfigurations
 			local res, data, cde, msg = Harmony.GetConfig()
 			if res then
+				local data = data.data
 				local dataTab = nil
+				SetLastCommand("GetConfig")
 				dataTab = {}
 				dataTab.Functions = {}
 				-- List all commands supported by given device grouped by function
@@ -2557,7 +2559,6 @@ function Harmony_GetConfig(cmd, id, devID)
 			end
 		else
 			-- See if child device has the current config
-			log.Debug("Getting child device %d command details.", tonumber(devID))
 			commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
 			if commands == "" then
 				-- Nope update them, update will store in variable
@@ -2574,11 +2575,8 @@ function Harmony_GetConfig(cmd, id, devID)
 		end	
 	elseif (cmd == 'get_config') then
 		-- List full configuration, we do not store it, so no known version.
-		SetLastCommand("GetConfig")
 		local res, data, cde, msg = Harmony.GetConfig()
-		if not res then 
-			SetLastCommand() 
-		end
+		if res then SetLastCommand("GetConfig")	end
 		return res, data, cde, msg
 	end
 end
