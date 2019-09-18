@@ -4,7 +4,7 @@
 	Written by R.Boer. 
 	V3.12 18 September 2019
 	
-	V3.11 Changes:
+	V3.12 Changes:
 				Fix for http request list_device_commands
 	V3.11 Changes:
 				Added IssueSequenceCommand to start a sequence.
