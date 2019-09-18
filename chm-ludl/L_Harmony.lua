@@ -2360,33 +2360,35 @@ function Harmony_UpdateConfigurations()
 		for k, v in pairs(luup.devices) do
 			if var.GetAttribute ('id_parent', k ) == HData.DEVICE then
 				local devID = var.Get("DeviceID", HData.SIDS.CHILD, k)
-				log.Debug("Found child device with id %s, get commands...",devID)
-				dataTab = {}
-				dataTab.Functions = {}
-				-- List all commands supported by given device grouped by function
-				for i = 1, #data.device do
-					if (data.device[i].id == devID) then
-						dataTab.ID = data.device[i].id
-						dataTab.Device = data.device[i].label
-						-- Store URI for DigitalMediaServer (= Sonos)
+				if devID ~= "" then -- We have other device types like Lamps that do not qualify.
+					log.Debug("Found child device with id %s, get commands...",devID)
+					dataTab = {}
+					dataTab.Functions = {}
+					-- List all commands supported by given device grouped by function
+					for i = 1, #data.device do
+						if (data.device[i].id == devID) then
+							dataTab.ID = data.device[i].id
+							dataTab.Device = data.device[i].label
+							-- Store URI for DigitalMediaServer (= Sonos)
 -- to do Sonos channel desciptions						
---						if data.device[i].['type'] == "DigitalMusicServer" then
---							dataTab.deviceProfileUri = data.device[i].deviceProfileUri
---						end
-						dataTab.Functions = {}
-						for j = 1, #data.device[i].controlGroup do
-							dataTab.Functions[j] = {}
-							dataTab.Functions[j].Function = data.device[i].controlGroup[j].name
-							dataTab.Functions[j].Commands = {}
-							for x = 1, #data.device[i].controlGroup[j]['function'] do
-								dataTab.Functions[j].Commands[x] = {}
-								dataTab.Functions[j].Commands[x].Label = data.device[i].controlGroup[j]['function'][x].label
-								dataTab.Functions[j].Commands[x].Name = data.device[i].controlGroup[j]['function'][x].name
-								dataTab.Functions[j].Commands[x].Action = json.decode(data.device[i].controlGroup[j]['function'][x].action).command
-							end
-						end	
-						var.Set("DeviceCommands", json.encode(dataTab),HData.SIDS.CHILD, k )
-						break
+--							if data.device[i].['type'] == "DigitalMusicServer" then
+--								dataTab.deviceProfileUri = data.device[i].deviceProfileUri
+--							end
+							dataTab.Functions = {}
+							for j = 1, #data.device[i].controlGroup do
+								dataTab.Functions[j] = {}
+								dataTab.Functions[j].Function = data.device[i].controlGroup[j].name
+								dataTab.Functions[j].Commands = {}
+								for x = 1, #data.device[i].controlGroup[j]['function'] do
+									dataTab.Functions[j].Commands[x] = {}
+									dataTab.Functions[j].Commands[x].Label = data.device[i].controlGroup[j]['function'][x].label
+									dataTab.Functions[j].Commands[x].Name = data.device[i].controlGroup[j]['function'][x].name
+									dataTab.Functions[j].Commands[x].Action = json.decode(data.device[i].controlGroup[j]['function'][x].action).command
+								end
+							end	
+							var.Set("DeviceCommands", json.encode(dataTab),HData.SIDS.CHILD, k )
+							break
+						end
 					end	
 				end
 			end
@@ -2454,7 +2456,7 @@ end
 
 -- Get Config stored, refresh is needed
 function Harmony_GetConfig(cmd, id, devID)
-	log.Debug("GetConfig "..cmd)
+	log.Debug("GetConfig for %s, Harmony device ID %s, dev ID %s",cmd, tostring(id), tostring(devID))
 	
 	if (HData.Plugin_Disabled == true) then
 		log.Warning("GetConfig : Plugin disabled.")
@@ -2516,13 +2518,53 @@ function Harmony_GetConfig(cmd, id, devID)
 			end
 			log.Debug("Looked up missing devID for %s, found %s",tostring(id),tostring(devID or "nil"))
 		end
-		-- See if child device has the current config
-		local commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
-		if commands == "" then
-			-- Nope update them, update will store in variable
-			local res, data, cde, msg = Harmony_UpdateConfigurations()
-			if res then 
-				commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
+		log.Debug("list_device_commands for %s / %s",tostring(id),tostring(devID or "nil"))
+		local commands = ""
+		if not devID then
+			log.Debug("No child device found, getting full config for device %s",tostring(id))
+			-- Not a child device, do direct request and lookup.
+			local res, data, cde, msg = Harmony.GetConfig()
+			if res then
+				local dataTab = nil
+				dataTab = {}
+				dataTab.Functions = {}
+				-- List all commands supported by given device grouped by function
+				for i = 1, #data.device do
+					if (data.device[i].id == id) then
+						dataTab.ID = data.device[i].id
+						dataTab.Device = data.device[i].label
+						-- Store URI for DigitalMediaServer (= Sonos)
+-- to do Sonos channel desciptions						
+--						if data.device[i].['type'] == "DigitalMusicServer" then
+--							dataTab.deviceProfileUri = data.device[i].deviceProfileUri
+--						end
+						dataTab.Functions = {}
+						for j = 1, #data.device[i].controlGroup do
+							dataTab.Functions[j] = {}
+							dataTab.Functions[j].Function = data.device[i].controlGroup[j].name
+							dataTab.Functions[j].Commands = {}
+							for x = 1, #data.device[i].controlGroup[j]['function'] do
+								dataTab.Functions[j].Commands[x] = {}
+								dataTab.Functions[j].Commands[x].Label = data.device[i].controlGroup[j]['function'][x].label
+								dataTab.Functions[j].Commands[x].Name = data.device[i].controlGroup[j]['function'][x].name
+								dataTab.Functions[j].Commands[x].Action = json.decode(data.device[i].controlGroup[j]['function'][x].action).command
+							end
+						end	
+						commands = json.encode(dataTab)
+						break
+					end
+				end
+			end
+		else
+			-- See if child device has the current config
+			log.Debug("Getting child device %d command details.", tonumber(devID))
+			commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
+			if commands == "" then
+				-- Nope update them, update will store in variable
+				local res, data, cde, msg = Harmony_UpdateConfigurations()
+				if res then 
+					commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
+				end
 			end
 		end	
 		if commands ~= "" then
@@ -3053,7 +3095,7 @@ function HTTP_Harmony (lul_request, lul_parameters)
 	local cmdp3 = ''
 	log.Debug('HTTP request is: %s.',tostring(lul_request))
 	for k,v in pairs(lul_parameters) do 
-		log.Log('Parameters : %s=%s.',tostring(k),tostring(v)) 
+		log.Debug('Parameters : %s=%s.',tostring(k),tostring(v)) 
 		k = k:lower()
 		if (k == 'cmd') then cmd = v 
 		elseif (k == 'cmdp1') then cmdp1 = v:gsub('"', '')
