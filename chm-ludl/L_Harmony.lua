@@ -2,8 +2,10 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.11 17 September 2019
+	V3.12 18 September 2019
 	
+	V3.12 Changes:
+				Fix for http request list_device_commands
 	V3.11 Changes:
 				Added IssueSequenceCommand to start a sequence.
 				Added GetSequences, FindSequenceByName, FindSequenceByID commands.
@@ -2358,33 +2360,35 @@ function Harmony_UpdateConfigurations()
 		for k, v in pairs(luup.devices) do
 			if var.GetAttribute ('id_parent', k ) == HData.DEVICE then
 				local devID = var.Get("DeviceID", HData.SIDS.CHILD, k)
-				log.Debug("Found child device with id %s, get commands...",devID)
-				dataTab = {}
-				dataTab.Functions = {}
-				-- List all commands supported by given device grouped by function
-				for i = 1, #data.device do
-					if (data.device[i].id == devID) then
-						dataTab.ID = data.device[i].id
-						dataTab.Device = data.device[i].label
-						-- Store URI for DigitalMediaServer (= Sonos)
+				if devID ~= "" then -- We have other device types like Lamps that do not qualify.
+					log.Debug("Found child device with id %s, get commands...",devID)
+					dataTab = {}
+					dataTab.Functions = {}
+					-- List all commands supported by given device grouped by function
+					for i = 1, #data.device do
+						if (data.device[i].id == devID) then
+							dataTab.ID = data.device[i].id
+							dataTab.Device = data.device[i].label
+							-- Store URI for DigitalMediaServer (= Sonos)
 -- to do Sonos channel desciptions						
---						if data.device[i].['type'] == "DigitalMusicServer" then
---							dataTab.deviceProfileUri = data.device[i].deviceProfileUri
---						end
-						dataTab.Functions = {}
-						for j = 1, #data.device[i].controlGroup do
-							dataTab.Functions[j] = {}
-							dataTab.Functions[j].Function = data.device[i].controlGroup[j].name
-							dataTab.Functions[j].Commands = {}
-							for x = 1, #data.device[i].controlGroup[j]['function'] do
-								dataTab.Functions[j].Commands[x] = {}
-								dataTab.Functions[j].Commands[x].Label = data.device[i].controlGroup[j]['function'][x].label
-								dataTab.Functions[j].Commands[x].Name = data.device[i].controlGroup[j]['function'][x].name
-								dataTab.Functions[j].Commands[x].Action = json.decode(data.device[i].controlGroup[j]['function'][x].action).command
-							end
-						end	
-						var.Set("DeviceCommands", json.encode(dataTab),HData.SIDS.CHILD, k )
-						break
+--							if data.device[i].['type'] == "DigitalMusicServer" then
+--								dataTab.deviceProfileUri = data.device[i].deviceProfileUri
+--							end
+							dataTab.Functions = {}
+							for j = 1, #data.device[i].controlGroup do
+								dataTab.Functions[j] = {}
+								dataTab.Functions[j].Function = data.device[i].controlGroup[j].name
+								dataTab.Functions[j].Commands = {}
+								for x = 1, #data.device[i].controlGroup[j]['function'] do
+									dataTab.Functions[j].Commands[x] = {}
+									dataTab.Functions[j].Commands[x].Label = data.device[i].controlGroup[j]['function'][x].label
+									dataTab.Functions[j].Commands[x].Name = data.device[i].controlGroup[j]['function'][x].name
+									dataTab.Functions[j].Commands[x].Action = json.decode(data.device[i].controlGroup[j]['function'][x].action).command
+								end
+							end	
+							var.Set("DeviceCommands", json.encode(dataTab),HData.SIDS.CHILD, k )
+							break
+						end
 					end	
 				end
 			end
@@ -2452,7 +2456,7 @@ end
 
 -- Get Config stored, refresh is needed
 function Harmony_GetConfig(cmd, id, devID)
-	log.Debug("GetConfig "..cmd)
+	log.Debug("GetConfig for %s, Harmony device ID %s, dev ID %s",cmd, tostring(id), tostring(devID))
 	
 	if (HData.Plugin_Disabled == true) then
 		log.Warning("GetConfig : Plugin disabled.")
@@ -2512,15 +2516,56 @@ function Harmony_GetConfig(cmd, id, devID)
 					break
 				end
 			end
-			log.Debug("Looked up missing devID for %s, found ",id,(devID or "nil"))
+			log.Debug("Looked up missing devID for %s, found %s",tostring(id),tostring(devID or "nil"))
 		end
-		-- See if child device has the current config
-		local commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
-		if commands == "" then
-			-- Nope update them, update will store in variable
-			local res, data, cde, msg = Harmony_UpdateConfigurations()
-			if res then 
-				commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
+		local commands = ""
+		if not devID then
+			log.Debug("No child device found, getting full config for device %s",tostring(id))
+			-- Not a child device, do direct request and lookup.
+			-- Is dup of part of Harmony_UpdateConfigurations
+			local res, data, cde, msg = Harmony.GetConfig()
+			if res then
+				local data = data.data
+				local dataTab = nil
+				SetLastCommand("GetConfig")
+				dataTab = {}
+				dataTab.Functions = {}
+				-- List all commands supported by given device grouped by function
+				for i = 1, #data.device do
+					if (data.device[i].id == id) then
+						dataTab.ID = data.device[i].id
+						dataTab.Device = data.device[i].label
+						-- Store URI for DigitalMediaServer (= Sonos)
+-- to do Sonos channel desciptions						
+--						if data.device[i].['type'] == "DigitalMusicServer" then
+--							dataTab.deviceProfileUri = data.device[i].deviceProfileUri
+--						end
+						dataTab.Functions = {}
+						for j = 1, #data.device[i].controlGroup do
+							dataTab.Functions[j] = {}
+							dataTab.Functions[j].Function = data.device[i].controlGroup[j].name
+							dataTab.Functions[j].Commands = {}
+							for x = 1, #data.device[i].controlGroup[j]['function'] do
+								dataTab.Functions[j].Commands[x] = {}
+								dataTab.Functions[j].Commands[x].Label = data.device[i].controlGroup[j]['function'][x].label
+								dataTab.Functions[j].Commands[x].Name = data.device[i].controlGroup[j]['function'][x].name
+								dataTab.Functions[j].Commands[x].Action = json.decode(data.device[i].controlGroup[j]['function'][x].action).command
+							end
+						end	
+						commands = json.encode(dataTab)
+						break
+					end
+				end
+			end
+		else
+			-- See if child device has the current config
+			commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
+			if commands == "" then
+				-- Nope update them, update will store in variable
+				local res, data, cde, msg = Harmony_UpdateConfigurations()
+				if res then 
+					commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
+				end
 			end
 		end	
 		if commands ~= "" then
@@ -2530,11 +2575,8 @@ function Harmony_GetConfig(cmd, id, devID)
 		end	
 	elseif (cmd == 'get_config') then
 		-- List full configuration, we do not store it, so no known version.
-		SetLastCommand("GetConfig")
 		local res, data, cde, msg = Harmony.GetConfig()
-		if not res then 
-			SetLastCommand() 
-		end
+		if res then SetLastCommand("GetConfig")	end
 		return res, data, cde, msg
 	end
 end
@@ -3051,7 +3093,7 @@ function HTTP_Harmony (lul_request, lul_parameters)
 	local cmdp3 = ''
 	log.Debug('HTTP request is: %s.',tostring(lul_request))
 	for k,v in pairs(lul_parameters) do 
-		log.Log('Parameters : %s=%s.',tostring(k),tostring(v)) 
+		log.Debug('Parameters : %s=%s.',tostring(k),tostring(v)) 
 		k = k:lower()
 		if (k == 'cmd') then cmd = v 
 		elseif (k == 'cmdp1') then cmdp1 = v:gsub('"', '')
@@ -3059,7 +3101,7 @@ function HTTP_Harmony (lul_request, lul_parameters)
 		elseif (k == 'cmdp3') then cmdp3 = v 
 		end
 	end
-	local function exec (cmd, cmdp1,cmdp2,cmdp3)
+	local function exec (cmd, cmdp1, cmdp2, cmdp3)
 		local res, data, cde, msg
 		if (cmd == 'list_activities') or (cmd == 'list_devices') or (cmd == 'list_lamps') or (cmd == 'list_device_commands') or (cmd == 'get_config') then 
 			res, data, cde, msg = Harmony_GetConfig(cmd, cmdp1) 
