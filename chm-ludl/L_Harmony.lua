@@ -3061,10 +3061,10 @@ function HTTP_Harmony (lul_request, lul_parameters)
 		elseif (k == 'cmdp3') then cmdp3 = v 
 		end
 	end
-	local function exec (cmd, cmdp1,cmdp2,cmdp3)
+	local function exec (cmd, cmdp1, cmdp2, cmdp3)
 		local res, data, cde, msg
 		if (cmd == 'list_activities') or (cmd == 'list_devices') or (cmd == 'list_lamps') or (cmd == 'list_device_commands') or (cmd == 'get_config') then 
-			res, data, cde, msg = Harmony_GetConfig(cmd, nil, cmdp1) 
+			res, data, cde, msg = Harmony_GetConfig(cmd, cmdp1) 
 		elseif (cmd == 'update_config') then 
 			res, data, cde, msg = Harmony_UpdateConfigurations() 
 		elseif (cmd == 'get_current_activity_id') then 
