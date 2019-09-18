@@ -2,8 +2,10 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.11 17 September 2019
+	V3.12 18 September 2019
 	
+	V3.11 Changes:
+				Fix for http request list_device_commands
 	V3.11 Changes:
 				Added IssueSequenceCommand to start a sequence.
 				Added GetSequences, FindSequenceByName, FindSequenceByID commands.
@@ -2512,7 +2514,7 @@ function Harmony_GetConfig(cmd, id, devID)
 					break
 				end
 			end
-			log.Debug("Looked up missing devID for %s, found ",id,(devID or "nil"))
+			log.Debug("Looked up missing devID for %s, found %s",tostring(id),tostring(devID or "nil"))
 		end
 		-- See if child device has the current config
 		local commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
@@ -3062,7 +3064,7 @@ function HTTP_Harmony (lul_request, lul_parameters)
 	local function exec (cmd, cmdp1,cmdp2,cmdp3)
 		local res, data, cde, msg
 		if (cmd == 'list_activities') or (cmd == 'list_devices') or (cmd == 'list_lamps') or (cmd == 'list_device_commands') or (cmd == 'get_config') then 
-			res, data, cde, msg = Harmony_GetConfig(cmd, cmdp1) 
+			res, data, cde, msg = Harmony_GetConfig(cmd, nil, cmdp1) 
 		elseif (cmd == 'update_config') then 
 			res, data, cde, msg = Harmony_UpdateConfigurations() 
 		elseif (cmd == 'get_current_activity_id') then 
