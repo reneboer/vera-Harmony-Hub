@@ -1,6 +1,6 @@
 {
 	"flashicon": "icons\/Harmony.png",
-	"default_icon": "Harmony.png",
+	"default_icon": "../../../icons/Harmony.png",
 	"inScene": "1",
 	"ToggleButton": 1,
 	"Tabs": [ {
@@ -38,7 +38,7 @@
 				"Width": 350,
 				"Height": 20
 			}
-		}]
+		} ]
 	},
 	{ 
 		"Label": { 

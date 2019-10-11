@@ -2,15 +2,17 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.12 18 September 2019
+	V3.13 8 October 2019
 	
+	V3.13 Changes:
+				Prepare for 7.30 release where icons can only be in /www/cmh/skins/default/icons/. Change in device json is backward compatible.
 	V3.12 Changes:
 				Fix for http request list_device_commands
 	V3.11 Changes:
 				Added IssueSequenceCommand to start a sequence.
 				Added GetSequences, FindSequenceByName, FindSequenceByID commands.
-				Fix for Hue RGB lights.
-				Child device attributes now set at device creation, not after and at each startup. Requires latest development brance for openLuup.
+				Fix for Hue RGB lights control.
+				Child device attributes now set at device creation, not after and at each startup. Requires latest development branch for openLuup.
 	V3.10 Changes:
 				Parameter type correction for Harmony_SetHubPolling to fix openLuup issue.
 	V3.9 Changes:
@@ -189,8 +191,8 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.11",
-	UIVersion = "3.3",
+	Version = "3.13",
+	UIVersion = "3.4",
 	DEVICE = "",
 	Description = "Harmony Control",
 	SIDS = {
@@ -203,7 +205,7 @@ local HData = { -- Data used by Harmony Plugin
 		COL = "urn:micasaverde-com:serviceId:Color1"
 	},
 	RemoteIconURL = "https://raw.githubusercontent.com/reneboer/vera-Harmony-Hub/master/icons/",
-	UI7IconURL = "",
+	UI7IconURL = "../../../icons/",
 	UI5IconURL = "icons\\/",
 	f_path = '/etc/cmh-ludl/',
 	onOpenLuup = false,
@@ -355,7 +357,7 @@ local taskHandle = -1
 		onOpenLuup = onol
 	end	
 	
-	-- Build loggin string safely up to given lenght. If only one string given, then do not format because of length limitations.
+	-- Build logging string safely up to given length. If only one string given, then do not format because of length limitations.
 	local function prot_format(ln,str,...)
 		local msg = ""
 		if arg[1] then 
@@ -369,6 +371,7 @@ local taskHandle = -1
 			return msg
 		end	
 	end	
+	
 	local function _log(...) 
 		if (def_level >= 10) then
 			luup.log(def_prefix .. ": " .. prot_format(max_length,...), 50) 
@@ -496,6 +499,7 @@ local _OpenLuup = 99
 	end
 	
 	-- Create links for UI6 or UI7 image locations if missing.
+--[[ we now have a reference to /www/cmh/skins/default/icons/, no longer support for UI6.
 	local function _check_images(imageTable)
 		local imagePath =""
 		local sourcePath = "/www/cmh/skins/default/icons/"
@@ -515,7 +519,8 @@ local _OpenLuup = 99
 			end
 		end	
 	end
-	
+]]--
+
 	-- Round up or down to whole number.
 	local function _round(n)
 		return floor((floor(n*2) + 1)/2)
@@ -642,7 +647,7 @@ local _OpenLuup = 99
 		Initialize = _init,
 		ReloadLuup = _luup_reload,
 		Round = _round,
-		CheckImages = _check_images,
+--		CheckImages = _check_images,
 		GetMemoryUsed = _getmemoryused,
 		SetLuupFailure = _setluupfailure,
 		Split = _split,
@@ -2360,35 +2365,33 @@ function Harmony_UpdateConfigurations()
 		for k, v in pairs(luup.devices) do
 			if var.GetAttribute ('id_parent', k ) == HData.DEVICE then
 				local devID = var.Get("DeviceID", HData.SIDS.CHILD, k)
-				if devID ~= "" then -- We have other device types like Lamps that do not qualify.
-					log.Debug("Found child device with id %s, get commands...",devID)
-					dataTab = {}
-					dataTab.Functions = {}
-					-- List all commands supported by given device grouped by function
-					for i = 1, #data.device do
-						if (data.device[i].id == devID) then
-							dataTab.ID = data.device[i].id
-							dataTab.Device = data.device[i].label
-							-- Store URI for DigitalMediaServer (= Sonos)
+				log.Debug("Found child device with id %s, get commands...",devID)
+				dataTab = {}
+				dataTab.Functions = {}
+				-- List all commands supported by given device grouped by function
+				for i = 1, #data.device do
+					if (data.device[i].id == devID) then
+						dataTab.ID = data.device[i].id
+						dataTab.Device = data.device[i].label
+						-- Store URI for DigitalMediaServer (= Sonos)
 -- to do Sonos channel desciptions						
---							if data.device[i].['type'] == "DigitalMusicServer" then
---								dataTab.deviceProfileUri = data.device[i].deviceProfileUri
---							end
-							dataTab.Functions = {}
-							for j = 1, #data.device[i].controlGroup do
-								dataTab.Functions[j] = {}
-								dataTab.Functions[j].Function = data.device[i].controlGroup[j].name
-								dataTab.Functions[j].Commands = {}
-								for x = 1, #data.device[i].controlGroup[j]['function'] do
-									dataTab.Functions[j].Commands[x] = {}
-									dataTab.Functions[j].Commands[x].Label = data.device[i].controlGroup[j]['function'][x].label
-									dataTab.Functions[j].Commands[x].Name = data.device[i].controlGroup[j]['function'][x].name
-									dataTab.Functions[j].Commands[x].Action = json.decode(data.device[i].controlGroup[j]['function'][x].action).command
-								end
-							end	
-							var.Set("DeviceCommands", json.encode(dataTab),HData.SIDS.CHILD, k )
-							break
-						end
+--						if data.device[i].['type'] == "DigitalMusicServer" then
+--							dataTab.deviceProfileUri = data.device[i].deviceProfileUri
+--						end
+						dataTab.Functions = {}
+						for j = 1, #data.device[i].controlGroup do
+							dataTab.Functions[j] = {}
+							dataTab.Functions[j].Function = data.device[i].controlGroup[j].name
+							dataTab.Functions[j].Commands = {}
+							for x = 1, #data.device[i].controlGroup[j]['function'] do
+								dataTab.Functions[j].Commands[x] = {}
+								dataTab.Functions[j].Commands[x].Label = data.device[i].controlGroup[j]['function'][x].label
+								dataTab.Functions[j].Commands[x].Name = data.device[i].controlGroup[j]['function'][x].name
+								dataTab.Functions[j].Commands[x].Action = json.decode(data.device[i].controlGroup[j]['function'][x].action).command
+							end
+						end	
+						var.Set("DeviceCommands", json.encode(dataTab),HData.SIDS.CHILD, k )
+						break
 					end	
 				end
 			end
@@ -2456,7 +2459,7 @@ end
 
 -- Get Config stored, refresh is needed
 function Harmony_GetConfig(cmd, id, devID)
-	log.Debug("GetConfig for %s, Harmony device ID %s, dev ID %s",cmd, tostring(id), tostring(devID))
+	log.Debug("GetConfig "..cmd)
 	
 	if (HData.Plugin_Disabled == true) then
 		log.Warning("GetConfig : Plugin disabled.")
@@ -2566,7 +2569,7 @@ function Harmony_GetConfig(cmd, id, devID)
 				if res then 
 					commands = var.Get("DeviceCommands",HData.SIDS.CHILD,devID)
 				end
-			end
+			end	
 		end	
 		if commands ~= "" then
 			return true, json.decode(commands)
@@ -2575,8 +2578,11 @@ function Harmony_GetConfig(cmd, id, devID)
 		end	
 	elseif (cmd == 'get_config') then
 		-- List full configuration, we do not store it, so no known version.
+		SetLastCommand("GetConfig")
 		local res, data, cde, msg = Harmony.GetConfig()
-		if res then SetLastCommand("GetConfig")	end
+		if not res then 
+			SetLastCommand() 
+		end
 		return res, data, cde, msg
 	end
 end
@@ -3093,7 +3099,7 @@ function HTTP_Harmony (lul_request, lul_parameters)
 	local cmdp3 = ''
 	log.Debug('HTTP request is: %s.',tostring(lul_request))
 	for k,v in pairs(lul_parameters) do 
-		log.Debug('Parameters : %s=%s.',tostring(k),tostring(v)) 
+		log.Log('Parameters : %s=%s.',tostring(k),tostring(v)) 
 		k = k:lower()
 		if (k == 'cmd') then cmd = v 
 		elseif (k == 'cmdp1') then cmdp1 = v:gsub('"', '')
@@ -3101,7 +3107,7 @@ function HTTP_Harmony (lul_request, lul_parameters)
 		elseif (k == 'cmdp3') then cmdp3 = v 
 		end
 	end
-	local function exec (cmd, cmdp1, cmdp2, cmdp3)
+	local function exec (cmd, cmdp1,cmdp2,cmdp3)
 		local res, data, cde, msg
 		if (cmd == 'list_activities') or (cmd == 'list_devices') or (cmd == 'list_lamps') or (cmd == 'list_device_commands') or (cmd == 'get_config') then 
 			res, data, cde, msg = Harmony_GetConfig(cmd, cmdp1) 
@@ -3316,57 +3322,59 @@ local function Harmony_SyncDevices(childDevices)
 	local remicons = (var.GetNumber('RemoteImages') == 1)
 	childDeviceIDs = childDeviceIDs .. ','
 	for deviceID in childDeviceIDs:gmatch("([^,]*),") do
-		local device = nil
-		local altid = 'HAM'..HData.DEVICE..'_'..deviceID
-		-- Find matching Device definition
-		for i = 1, #Devices_t.devices do 
-			if (Devices_t.devices[i].ID == deviceID) then
-				device = Devices_t.devices[i]
-				break
-			end	
-		end
-		if device then
-			-- See if the device specific files already exist, if not copy from base and adapt. No longer needed on openLuup.
-			local fname = 'D_HarmonyDevice'
-			if not HData.onOpenLuup then
-				fname = fname..HData.DEVICE..'_'..deviceID
-				f=io.open(HData.f_path..fname..'.xml.lzo',"r")
-				if f then
-					-- Found, no actions needed
-					io.close(f)
-					log.Debug('CreateChildren: Device files for %s exist.',deviceID)
-				else
-					-- Not yet there, make them
-					log.Debug('CreateChildren: Making new device files.')
-					cnfgFile.CreateDeviceFile(deviceID,'HarmonyDevice',HData.DEVICE)
-					cnfgFile.CreateJSONFile(deviceID,'D_HarmonyDevice',true,{},remicons,nil,HData.DEVICE)
-				end
+		if deviceID ~= "" then
+			local device = nil
+			local altid = 'HAM'..HData.DEVICE..'_'..deviceID
+			-- Find matching Device definition
+			for i = 1, #Devices_t.devices do 
+				if (Devices_t.devices[i].ID == deviceID) then
+					device = Devices_t.devices[i]
+					break
+				end	
 			end
-			local vartable = {
-				HData.SIDS.HA..",HideDeleteButton=1",
-				HData.SIDS.CHILD..",DeviceID="..deviceID,
-				HData.SIDS.CHILD..",HubName="..var.GetAttribute("name"),
-				HData.SIDS.CHILD..",DeviceCommands=",
-			}
-			if device.Model then vartable[#vartable+1] = ",model="..device.Model end
-			if device.Manufacturer then  vartable[#vartable+1] = ",manufacturer="..device.Manufacturer end
+			if device then
+				-- See if the device specific files already exist, if not copy from base and adapt. No longer needed on openLuup.
+				local fname = 'D_HarmonyDevice'
+				if not HData.onOpenLuup then
+					fname = fname..HData.DEVICE..'_'..deviceID
+					f=io.open(HData.f_path..fname..'.xml.lzo',"r")
+					if f then
+						-- Found, no actions needed
+						io.close(f)
+						log.Debug('CreateChildren: Device files for %s exist.',deviceID)
+					else
+						-- Not yet there, make them
+						log.Debug('CreateChildren: Making new device files.')
+						cnfgFile.CreateDeviceFile(deviceID,'HarmonyDevice',HData.DEVICE)
+						cnfgFile.CreateJSONFile(deviceID,'D_HarmonyDevice',true,{},remicons,nil,HData.DEVICE)
+					end
+				end
+				local vartable = {
+					HData.SIDS.HA..",HideDeleteButton=1",
+					HData.SIDS.CHILD..",DeviceID="..deviceID,
+					HData.SIDS.CHILD..",HubName="..var.GetAttribute("name"),
+					HData.SIDS.CHILD..",DeviceCommands=",
+				}
+				if device.Model then vartable[#vartable+1] = ",model="..device.Model end
+				if device.Manufacturer then  vartable[#vartable+1] = ",manufacturer="..device.Manufacturer end
 			
-			local name = "HRM: " .. string.gsub(device.Device, "%s%(.+%)", "")
-			log.Debug("Child device id " .. altid .. " (" .. name .. "), number " .. deviceID)
-			luup.chdev.append(
-		    	HData.DEVICE, 				-- parent (this device)
-		    	childDevices, 				-- pointer from above "start" call
-		    	altid,						-- child Alt ID
-		    	name,						-- child device description 
-		    	"", 						-- serviceId (keep blank for UI7 restart avoidance)
-		    	fname..".xml",				-- device file for given device
-		    	"",							-- Implementation file
-		    	utils.Join(vartable, "\n"),	-- parameters to set 
-		    	embed,						-- child devices can go in any room or not
-				false)						-- child devices is not hidden
-		else
-			log.Warning("Device definitions not found on Harmony Hub for ID %s.",deviceID)
-		end		
+				local name = "HRM: " .. string.gsub(device.Device, "%s%(.+%)", "")
+				log.Debug("Child device id " .. altid .. " (" .. name .. "), number " .. deviceID)
+				luup.chdev.append(
+					HData.DEVICE, 				-- parent (this device)
+					childDevices, 				-- pointer from above "start" call
+					altid,						-- child Alt ID
+					name,						-- child device description 
+					"", 						-- serviceId (keep blank for UI7 restart avoidance)
+					fname..".xml",				-- device file for given device
+					"",							-- Implementation file
+					utils.Join(vartable, "\n"),	-- parameters to set 
+					embed,						-- child devices can go in any room or not
+					false)						-- child devices is not hidden
+			else
+				log.Warning("Device definitions not found on Harmony Hub for ID %s.",deviceID)
+			end		
+		end
 	end
 end
 
@@ -3802,7 +3810,7 @@ function Harmony_init(lul_device)
 		-- See if a rewrite of teh static JSON files is needed.
 		local forcenewjson = false
 		-- Make sure icons are accessible when they should be, even works after factory reset or when single image link gets removed or added.
-		utils.CheckImages(HData.Images) 
+		--utils.CheckImages(HData.Images) 
 		-- See if we are upgrading UI settings, if so force rewrite of JSON files. V2.28
 		local version = var.Get("UIVersion")
 		if version ~= HData.UIVersion then forcenewjson = true end
