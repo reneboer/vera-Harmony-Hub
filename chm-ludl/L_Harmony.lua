@@ -2,8 +2,10 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.13 8 October 2019
+	V3.14 28 October 2019
 	
+	V3.14 Changes:
+				CustomModeConfiguration has been corrected in 7.30, adapting for change
 	V3.13 Changes:
 				Prepare for 7.30 release where icons can only be in /www/cmh/skins/default/icons/. Change in device json is backward compatible.
 	V3.12 Changes:
@@ -191,8 +193,8 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.13",
-	UIVersion = "3.4",
+	Version = "3.14",
+	UIVersion = "3.5",
 	DEVICE = "",
 	Description = "Harmony Control",
 	SIDS = {
@@ -498,29 +500,6 @@ local _OpenLuup = 99
 		end
 	end
 	
-	-- Create links for UI6 or UI7 image locations if missing.
---[[ we now have a reference to /www/cmh/skins/default/icons/, no longer support for UI6.
-	local function _check_images(imageTable)
-		local imagePath =""
-		local sourcePath = "/www/cmh/skins/default/icons/"
-		if luup.version_major >= 7 then
-			imagePath = "/www/cmh/skins/default/img/devices/device_states/"
-		elseif luup.version_major == 6 then
-			imagePath = "/www/cmh_ui6/skins/default/icons/"
-		else
-			-- Default if for UI5, no idea what applies to older versions
-			imagePath = "/www/cmh/skins/default/icons/"
-		end
-		if imagePath ~= sourcePath then
-			for i = 1, #imageTable do
-				local source = sourcePath..imageTable[i]..".png"
-				local target = imagePath..imageTable[i]..".png"
-				os.execute(("[ ! -e %s ] && ln -s %s %s"):format(target, source, target))
-			end
-		end	
-	end
-]]--
-
 	-- Round up or down to whole number.
 	local function _round(n)
 		return floor((floor(n*2) + 1)/2)
@@ -647,7 +626,6 @@ local _OpenLuup = 99
 		Initialize = _init,
 		ReloadLuup = _luup_reload,
 		Round = _round,
---		CheckImages = _check_images,
 		GetMemoryUsed = _getmemoryused,
 		SetLuupFailure = _setluupfailure,
 		Split = _split,
@@ -837,6 +815,7 @@ local function wsAPI()
 	end
 	
 	local ws_close = function(code)
+log.LogFile("Calling ws_close.")
 		if state ~= sv.OPEN then
 			return false,1006,'wrong state'
 		end
@@ -894,6 +873,7 @@ local function wsAPI()
 		if state ~= sv.CLOSED then
 			return nil,'wrong state',nil
 		end
+log.LogFile("Calling ws_connect.")
 		sock = socket.tcp()
 		local _,err = sock:connect(host,port)
 		if err then
@@ -968,7 +948,7 @@ local function HarmonyAPI()
 
 	-- Open web-socket to Hub and kick-off message loop if polling is active.
 	local Connect = function()
---log.LogFile("Calling Connect.")
+log.LogFile("Calling Connect.")
 		if ((ipa or "") == "") then 
 			log.Error("Connect, no IP Address specified ") 
 			return nil, nil, 400, "IP address missing" 
@@ -979,7 +959,7 @@ local function HarmonyAPI()
 		end	
 		if ws_client.is_connected() then
 			log.Debug("We should have web-socket open.")
---log.LogFile("We should have web-socket open.")
+log.LogFile("Connect: We should have web-socket open.")
 -- Assume this polling still is active
 --			if polling_enabled then
 --				-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
@@ -991,19 +971,21 @@ local function HarmonyAPI()
 --			local res, prot, hdrs = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
 			local res, prot, hdrs = ws_client.connect(ipa,port,format("/?domain=%s&hubId=%s",hub_data.domain,hub_data.remote_id))
 			if res then
---log.LogFile("We opened web-socket.")
+log.LogFile("Connect:We opened web-socket.")
 				log.Debug("Web-socket to Hub is opened...")
 				last_command_ts = os.time()
 				if polling_enabled then
 					-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
---log.LogFile("Kick-off polling loops")
+log.LogFile("Connect:Kick-off polling loops")
 					luup.call_delay("HH_ping_loop",30)
 					luup.call_delay("HH_message_loop",1)
 				end
 				return true, 200
 			else	
+log.LogFile("Connect:failed to open web-socket to hub %s, err %s.",ipa,prot or "")
 				log.Error("Connect, failed to open web-socket to hub %s, err %s.",ipa,prot or "")
 			end
+log.LogFile("Connect:Closing socket, should not get here!!")
 			ws_client.close()
 		end	
 		return nil, nil, 503, "Unable to connect."
@@ -1044,7 +1026,7 @@ local function HarmonyAPI()
 			while ws_client.message_waiting() do
 				local response, op = ws_client.receive()
 				if response then
---log.LogFile("response from hub ".. response)				
+log.LogFile("MSG Loop: response from hub ".. response)				
 					local data, _, errMsg = json.decode(response)
 					if data then
 						HH_HandleCallBack(data)
@@ -1064,14 +1046,14 @@ local function HarmonyAPI()
 		if polling_enabled then
 			local next_poll = os.difftime(os.time(),last_command_ts)
 if next_poll == 0 then
---log.LogFile("last ping was zero (%d) seconds ago, is it double?", next_poll)
+log.LogFile("PingLoop:last ping was zero (%d) seconds ago, is it double?", next_poll)
 end			
 			if next_poll < 45 then 
 				next_poll = 45 - next_poll
 			else
 				next_poll = 45 
 			end
---log.LogFile("Scheduling next ping loop call in %d seconds.", next_poll)
+log.LogFile("PingLoop:Scheduling next ping loop call in %d seconds.", next_poll)
 			luup.call_delay("HH_ping_loop",next_poll)
 			if next_poll >= 45 then
 				log.Debug("Keep hub connection open")
@@ -1081,17 +1063,17 @@ end
 				else
 					if os.difftime(os.time(),last_ping_success) > 600 then
 						log.Debug("Failed to ping hub for more than five minutes, trying to re-open connection.")
---log.LogFile("Failed to ping hub for more than five minutes, trying to re-open connection.")
+log.LogFile("PingLoop:Failed to ping hub for more than five minutes, trying to re-open connection.")
 						Close()
 						Connect()
 					else	
 						log.Debug("Failed to ping hub.")
---log.LogFile("Failed to ping hub.")
+log.LogFile("PingLoop:Failed to ping hub.")
 					end	
 				end	
 			end	
 		else
---log.LogFile("End of polling, closed connection to Hub.")
+log.LogFile("PingLoop:End of polling, closed connection to Hub.")
 			-- End of polling, close connection to Hub
 			Close()
 			log.Debug("End of polling, closed connection to Hub.")
@@ -2044,7 +2026,14 @@ local function ConfigFilesAPI()
 		for i = 1, #buttons do
 			local lab = buttons[i].Label or 'missing'
 			local val = buttons[i].ID or 'missing'
-			local str = lab .. ";CMD" .. val .. ";" .. sid .. cmd .. prm .. val
+			local str = ";" .. sid .. cmd .. prm .. val
+			if luup.short_version then
+				-- luup.short_version is new in UI7.30 and up so is good check
+				-- 7.30 and up have lable and command as documented in wiki
+				str = "CMD" .. val .. ";".. lab .. str
+			else	
+				str = lab .. ";CMD" .. val .. str
+			end
 			if i < #buttons then str = str .. '|' end
 			retVal = (retVal or "") .. str
 		end	
@@ -3809,8 +3798,6 @@ function Harmony_init(lul_device)
 	else
 		-- See if a rewrite of teh static JSON files is needed.
 		local forcenewjson = false
-		-- Make sure icons are accessible when they should be, even works after factory reset or when single image link gets removed or added.
-		--utils.CheckImages(HData.Images) 
 		-- See if we are upgrading UI settings, if so force rewrite of JSON files. V2.28
 		local version = var.Get("UIVersion")
 		if version ~= HData.UIVersion then forcenewjson = true end
