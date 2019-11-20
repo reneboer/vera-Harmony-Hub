@@ -2,8 +2,10 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.14 28 October 2019
+	V3.15 20 November 2019
 	
+	V3.15 Changes:
+				Fix in polling routines
 	V3.14 Changes:
 				CustomModeConfiguration has been corrected in 7.30, adapting for change
 	V3.13 Changes:
@@ -174,26 +176,26 @@ Control the harmony Hub
 	It seems that none of the elaborate authentication is used in the Hub version I have. So only SubmitCommand is implemented.
 --]==]
 
-local ltn12 	= require("ltn12")
+local ltn12		= require("ltn12")
 local http		= require("socket.http")
-local url 		= require("socket.url")
+local url		= require("socket.url")
 local socket	= require("socket")
-local mime 		= require("mime")
-local lfs 		= require("lfs")
-local json 		= require("dkjson")
+local mime		= require("mime")
+local lfs		= require("lfs")
+local json		= require("dkjson")
 if (type(json) == "string") then
 	luup.log("Harmony warning dkjson missing, falling back to harmony_json", 2)
-	json 		= require("harmony_json")
+	json		= require("harmony_json")
 end
-local bit 		= require('bit')
+local bit		= require('bit')
 if (type(bit) == "string") then
-	bit 		= require('bit32')
+	bit			= require('bit32')
 end
 
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.14",
+	Version = "3.15",
 	UIVersion = "3.5",
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -1039,33 +1041,49 @@ log.LogFile("MSG Loop: response from hub ".. response)
 			luup.call_delay("HH_message_loop",1)
 		end
 	end
+	
+	-- Wrapper for Connect call we can delay.
+	local HH_reconnect = function(poll_flg)
+		polling_enabled = (poll_flg == "1")
+		Connect()
+	end
 
 	-- To keep the connection to the Hub open send a ping each 45 seconds or 45 seconds after the last command.
 	--	  When polling is disabled, then close the connection to the Hub.
 	local HH_ping_loop = function()
 		if polling_enabled then
 			local next_poll = os.difftime(os.time(),last_command_ts)
-if next_poll == 0 then
+			if next_poll == 0 then
 log.LogFile("PingLoop:last ping was zero (%d) seconds ago, is it double?", next_poll)
-end			
-			if next_poll < 45 then 
-				next_poll = 45 - next_poll
-			else
-				next_poll = 45 
+				if os.difftime(os.time(),last_ping_success) > 40 then
+					next_poll = 45
+				end	
 			end
+			if next_poll > 0 then
+log.LogFile("PingLoop:last ping was (%d) seconds ago.", next_poll)
+				if next_poll < 45 then 
+					next_poll = 45 - next_poll
+				else
+					next_poll = 45 
+				end
 log.LogFile("PingLoop:Scheduling next ping loop call in %d seconds.", next_poll)
-			luup.call_delay("HH_ping_loop",next_poll)
+				luup.call_delay("HH_ping_loop",next_poll)
+			end	
 			if next_poll >= 45 then
 				log.Debug("Keep hub connection open")
 				if ws_client.ping() then
 					last_command_ts = os.time()
 					last_ping_success = last_command_ts
+log.LogFile("PingLoop:Success to ping hub.")
 				else
 					if os.difftime(os.time(),last_ping_success) > 600 then
 						log.Debug("Failed to ping hub for more than five minutes, trying to re-open connection.")
 log.LogFile("PingLoop:Failed to ping hub for more than five minutes, trying to re-open connection.")
+						-- By disabing polling for reconnect, we avoid double message loop to occure after reconnect.
+						polling_enabled = false
 						Close()
-						Connect()
+						luup.call_delay("HH_reconnect",5, "1")
+--						Connect()
 					else	
 						log.Debug("Failed to ping hub.")
 log.LogFile("PingLoop:Failed to ping hub.")
@@ -1480,6 +1498,7 @@ log.LogFile("PingLoop:End of polling, closed connection to Hub.")
 		_G.HH_send_hold_command = HH_send_hold_command
 		_G.HH_message_loop = HH_message_loop
 		_G.HH_ping_loop = HH_ping_loop
+		_G.HH_reconnect = HH_reconnect
 		-- Connect to ws_client, when done prior, Close open connection to Hub and re-open with new details
 		if not ws_client then 
 			ws_client = wsAPI() 
