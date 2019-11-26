@@ -2,8 +2,10 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.14 28 October 2019
+	V3.15 26 November 2019
 	
+	V3.15 Changes:
+				Fix in polling routines
 	V3.14 Changes:
 				CustomModeConfiguration has been corrected in 7.30, adapting for change
 	V3.13 Changes:
@@ -174,26 +176,26 @@ Control the harmony Hub
 	It seems that none of the elaborate authentication is used in the Hub version I have. So only SubmitCommand is implemented.
 --]==]
 
-local ltn12 	= require("ltn12")
+local ltn12		= require("ltn12")
 local http		= require("socket.http")
-local url 		= require("socket.url")
+local url		= require("socket.url")
 local socket	= require("socket")
-local mime 		= require("mime")
-local lfs 		= require("lfs")
-local json 		= require("dkjson")
+local mime		= require("mime")
+local lfs		= require("lfs")
+local json		= require("dkjson")
 if (type(json) == "string") then
 	luup.log("Harmony warning dkjson missing, falling back to harmony_json", 2)
-	json 		= require("harmony_json")
+	json		= require("harmony_json")
 end
-local bit 		= require('bit')
+local bit		= require('bit')
 if (type(bit) == "string") then
-	bit 		= require('bit32')
+	bit			= require('bit32')
 end
 
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.14",
+	Version = "3.15",
 	UIVersion = "3.5",
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -815,7 +817,6 @@ local function wsAPI()
 	end
 	
 	local ws_close = function(code)
-log.LogFile("Calling ws_close.")
 		if state ~= sv.OPEN then
 			return false,1006,'wrong state'
 		end
@@ -873,7 +874,6 @@ log.LogFile("Calling ws_close.")
 		if state ~= sv.CLOSED then
 			return nil,'wrong state',nil
 		end
-log.LogFile("Calling ws_connect.")
 		sock = socket.tcp()
 		local _,err = sock:connect(host,port)
 		if err then
@@ -948,7 +948,6 @@ local function HarmonyAPI()
 
 	-- Open web-socket to Hub and kick-off message loop if polling is active.
 	local Connect = function()
-log.LogFile("Calling Connect.")
 		if ((ipa or "") == "") then 
 			log.Error("Connect, no IP Address specified ") 
 			return nil, nil, 400, "IP address missing" 
@@ -959,33 +958,21 @@ log.LogFile("Calling Connect.")
 		end	
 		if ws_client.is_connected() then
 			log.Debug("We should have web-socket open.")
-log.LogFile("Connect: We should have web-socket open.")
--- Assume this polling still is active
---			if polling_enabled then
---				-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
---				luup.call_delay("HH_ping_loop",30)
---				luup.call_delay("HH_message_loop",1)
---			end
 			return true, 200
 		else
---			local res, prot, hdrs = ws_client.connect(ipa,port,"/?domain=svcs.myharmony.com&hubId="..hub_data.remote_id)
 			local res, prot, hdrs = ws_client.connect(ipa,port,format("/?domain=%s&hubId=%s",hub_data.domain,hub_data.remote_id))
 			if res then
-log.LogFile("Connect:We opened web-socket.")
 				log.Debug("Web-socket to Hub is opened...")
 				last_command_ts = os.time()
 				if polling_enabled then
 					-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
-log.LogFile("Connect:Kick-off polling loops")
 					luup.call_delay("HH_ping_loop",30)
 					luup.call_delay("HH_message_loop",1)
 				end
 				return true, 200
 			else	
-log.LogFile("Connect:failed to open web-socket to hub %s, err %s.",ipa,prot or "")
 				log.Error("Connect, failed to open web-socket to hub %s, err %s.",ipa,prot or "")
 			end
-log.LogFile("Connect:Closing socket, should not get here!!")
 			ws_client.close()
 		end	
 		return nil, nil, 503, "Unable to connect."
@@ -1026,7 +1013,6 @@ log.LogFile("Connect:Closing socket, should not get here!!")
 			while ws_client.message_waiting() do
 				local response, op = ws_client.receive()
 				if response then
-log.LogFile("MSG Loop: response from hub ".. response)				
 					local data, _, errMsg = json.decode(response)
 					if data then
 						HH_HandleCallBack(data)
@@ -1039,22 +1025,31 @@ log.LogFile("MSG Loop: response from hub ".. response)
 			luup.call_delay("HH_message_loop",1)
 		end
 	end
+	
+	-- Wrapper for Connect call we can delay.
+	local HH_reconnect = function(poll_flg)
+		polling_enabled = (poll_flg == "1")
+		Connect()
+	end
 
 	-- To keep the connection to the Hub open send a ping each 45 seconds or 45 seconds after the last command.
 	--	  When polling is disabled, then close the connection to the Hub.
 	local HH_ping_loop = function()
 		if polling_enabled then
 			local next_poll = os.difftime(os.time(),last_command_ts)
-if next_poll == 0 then
-log.LogFile("PingLoop:last ping was zero (%d) seconds ago, is it double?", next_poll)
-end			
-			if next_poll < 45 then 
-				next_poll = 45 - next_poll
-			else
-				next_poll = 45 
+			if next_poll == 0 then
+				if os.difftime(os.time(),last_ping_success) > 40 then
+					next_poll = 45
+				end	
 			end
-log.LogFile("PingLoop:Scheduling next ping loop call in %d seconds.", next_poll)
-			luup.call_delay("HH_ping_loop",next_poll)
+			if next_poll > 0 then
+				if next_poll < 45 then 
+					next_poll = 45 - next_poll
+				else
+					next_poll = 45 
+				end
+				luup.call_delay("HH_ping_loop",next_poll)
+			end	
 			if next_poll >= 45 then
 				log.Debug("Keep hub connection open")
 				if ws_client.ping() then
@@ -1063,17 +1058,16 @@ log.LogFile("PingLoop:Scheduling next ping loop call in %d seconds.", next_poll)
 				else
 					if os.difftime(os.time(),last_ping_success) > 600 then
 						log.Debug("Failed to ping hub for more than five minutes, trying to re-open connection.")
-log.LogFile("PingLoop:Failed to ping hub for more than five minutes, trying to re-open connection.")
+						-- By disabing polling for reconnect, we avoid double message loop to occure after reconnect.
+						polling_enabled = false
 						Close()
-						Connect()
+						luup.call_delay("HH_reconnect",5, "1")
 					else	
 						log.Debug("Failed to ping hub.")
-log.LogFile("PingLoop:Failed to ping hub.")
 					end	
 				end	
 			end	
 		else
-log.LogFile("PingLoop:End of polling, closed connection to Hub.")
 			-- End of polling, close connection to Hub
 			Close()
 			log.Debug("End of polling, closed connection to Hub.")
@@ -1433,18 +1427,12 @@ log.LogFile("PingLoop:End of polling, closed connection to Hub.")
 	-- When called with true then the connection to the Hub will be kept open
 	-- Can be toggled at any time.
 	local SetHubPolling = function(poll)
---log.LogFile("Entering SetHubPolling with value %s.", tostring(poll))
 		if polling_enabled == poll then return true, 200 end
 		polling_enabled = poll
 		if poll then
---log.LogFile("Polling is started again")
 			-- re-open the connection
 			local res, data, cde, msg = Connect()
 			if res then
--- Moved to Connect			
---				-- Initiate polling again
---				luup.call_delay("HH_ping_loop",30)
---				HH_message_loop()
 			else
 				log.Error("SetPolling, could not reconnect to Hub. Err : %s, %s", cde, msg)
 			end
@@ -1480,27 +1468,14 @@ log.LogFile("PingLoop:End of polling, closed connection to Hub.")
 		_G.HH_send_hold_command = HH_send_hold_command
 		_G.HH_message_loop = HH_message_loop
 		_G.HH_ping_loop = HH_ping_loop
+		_G.HH_reconnect = HH_reconnect
 		-- Connect to ws_client, when done prior, Close open connection to Hub and re-open with new details
 		if not ws_client then 
 			ws_client = wsAPI() 
 		else
 			Close()
-			-- Reset remote ID as we may have a different IP address.
---			hub_data.remote_id = ""
 		end
--- Moved to Connect
---		local res, data, cde, msg
---		if polling_enabled then
---			res, data, cde, msg = Connect()
---			if res then
---				-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
---				luup.call_delay("HH_ping_loop",30)
---				HH_message_loop()
---			end
---		else
-			res = true
---		end
-		return res, data, cde, msg
+		return true, nil, 200, "OK"
 	end
 	
 	return{ -- Methods exposed by API
@@ -1733,15 +1708,12 @@ local function ConfigFilesAPI()
 
 	-- Build the JSON file 
 	local function _writeJsonFile(devID,outf,iconPath,isChild,buttons,childDev,isSonos)
---		local id, lab, dur, sid
 		local id, lab, dur
 		local numBtn = #buttons
---		if not isChild then sid = Sid else sid = ChSid end
 		local sid = isChild and ChSid or Sid
 		-- For main device default icon is wait so it status is more clear during all reloads.
 		if IsUI7 then
 			local defIcon = isChild and 'Harmony.png' or 'Harmony_75.png'
---			if (isChild == false) then defIcon = 'Harmony_75.png' else defIcon = 'Harmony.png' end
 			outf:write(format('{\n"default_icon": "%s%s",\n',iconPath,defIcon))
 		else
 			outf:write(format('{\n"flashicon": "%sHarmony.png",\n',iconPath))
@@ -1773,7 +1745,6 @@ local function ConfigFilesAPI()
 		if IsUI7 then outf:write('"TopNavigationTab": 1,\n') end
 		outf:write('"ControlGroup": [ { "id": "1", "scenegroup": "1", "isSingle": "1" } ],\n')
 		-- Calculate correct SceneGroup size. Size not used in UI7.
---		if numBtn < 5 then top = 1 else top = 0 end
 		top = (numBtn < 5) and 1 or 0 
 		if numBtn <= 1 then 
 			x = 1 
@@ -2289,7 +2260,6 @@ end
 -- If Polling is on and turned off, wait for the hub to be off (current activity == -1)
 function Harmony_SetHubPolling(poll_flg)
 	local pf = tonumber(poll_flg,10) or 0
---log.LogFile("Entering Harmony_SetHubPolling with value %s.",tostring(pf))
 	local change_poll = true
 	pf = (pf == 1)
 	if (not pf) and Harmony.GetHubPolling() then
@@ -2303,7 +2273,6 @@ function Harmony_SetHubPolling(poll_flg)
 		end	
 	end
 	if change_poll then
---log.LogFile("Changing polling to value %s.",tostring(pf))
 		Harmony.SetHubPolling(pf)
 		if pf then
 			log.Debug("Turning on polling")
@@ -3963,7 +3932,7 @@ function Harmony_init(lul_device)
 	luup.call_delay("Harmony_Setup", 3, "", false)
 	log.Debug("Harmony Hub Control: init_module completed.")
 	utils.SetLuupFailure(0, HData.DEVICE)
-	return true
+	return true, "OK", HData.Description
 end
 
 -- See if we have incoming data. Buffer each XML section between <>. Call handler on full section.
