@@ -2,10 +2,14 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.15 26 November 2019
+	V3.16 3 January 2020
 	
+	V3.16 Changes:
+				Avoid possible busy deadlock if messages from Harmony are missed.
+				Surpressing confusing log message on UpdateConfig on devices that are Hue lights.
+				Added missing issue_sequence_command to http handler.
 	V3.15 Changes:
-				Fix in polling routines
+				Improve polling routines, code cleanup
 	V3.14 Changes:
 				CustomModeConfiguration has been corrected in 7.30, adapting for change
 	V3.13 Changes:
@@ -195,7 +199,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.15",
+	Version = "3.16",
 	UIVersion = "3.5",
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -981,6 +985,7 @@ local function HarmonyAPI()
 	-- Close socket to Hub
 	local Close = function()
 		ws_client.close()
+		jobStat = JobStatus.NO_JOB
 		return true, 200
 	end
 
@@ -1145,6 +1150,13 @@ local function HarmonyAPI()
 
 	-- Return current Job Status	
 	local GetJobStatus = function()
+		-- Handle possible missing reply on activity start causing IN_PROGRESS to remain
+		if jobStat == JobStatus.IN_PROGRESS then
+			if os.difftime(os.time(),last_command_ts)> 120 then 
+				log.Warning("Job status stuck at IN_PROGRESS for more than 120 seconds. Clearing status.")
+				jobStat = JobStatus.NO_JOB 
+			end
+		end
 		return true, jobStat or JobStatus.NO_JOB
 	end	
 	
@@ -2323,34 +2335,38 @@ function Harmony_UpdateConfigurations()
 		for k, v in pairs(luup.devices) do
 			if var.GetAttribute ('id_parent', k ) == HData.DEVICE then
 				local devID = var.Get("DeviceID", HData.SIDS.CHILD, k)
-				log.Debug("Found child device with id %s, get commands...",devID)
-				dataTab = {}
-				dataTab.Functions = {}
-				-- List all commands supported by given device grouped by function
-				for i = 1, #data.device do
-					if (data.device[i].id == devID) then
-						dataTab.ID = data.device[i].id
-						dataTab.Device = data.device[i].label
-						-- Store URI for DigitalMediaServer (= Sonos)
+				if devID ~= "" then
+					log.Debug("Found child device %d with id %s, get commands...",k,devID)
+					dataTab = {}
+					dataTab.Functions = {}
+					-- List all commands supported by given device grouped by function
+					for i = 1, #data.device do
+						if (data.device[i].id == devID) then
+							dataTab.ID = data.device[i].id
+							dataTab.Device = data.device[i].label
+							-- Store URI for DigitalMediaServer (= Sonos)
 -- to do Sonos channel desciptions						
 --						if data.device[i].['type'] == "DigitalMusicServer" then
 --							dataTab.deviceProfileUri = data.device[i].deviceProfileUri
 --						end
-						dataTab.Functions = {}
-						for j = 1, #data.device[i].controlGroup do
-							dataTab.Functions[j] = {}
-							dataTab.Functions[j].Function = data.device[i].controlGroup[j].name
-							dataTab.Functions[j].Commands = {}
-							for x = 1, #data.device[i].controlGroup[j]['function'] do
-								dataTab.Functions[j].Commands[x] = {}
-								dataTab.Functions[j].Commands[x].Label = data.device[i].controlGroup[j]['function'][x].label
-								dataTab.Functions[j].Commands[x].Name = data.device[i].controlGroup[j]['function'][x].name
-								dataTab.Functions[j].Commands[x].Action = json.decode(data.device[i].controlGroup[j]['function'][x].action).command
-							end
+							dataTab.Functions = {}
+							for j = 1, #data.device[i].controlGroup do
+								dataTab.Functions[j] = {}
+								dataTab.Functions[j].Function = data.device[i].controlGroup[j].name
+								dataTab.Functions[j].Commands = {}
+								for x = 1, #data.device[i].controlGroup[j]['function'] do
+									dataTab.Functions[j].Commands[x] = {}
+									dataTab.Functions[j].Commands[x].Label = data.device[i].controlGroup[j]['function'][x].label
+									dataTab.Functions[j].Commands[x].Name = data.device[i].controlGroup[j]['function'][x].name
+									dataTab.Functions[j].Commands[x].Action = json.decode(data.device[i].controlGroup[j]['function'][x].action).command
+								end
+							end	
+							var.Set("DeviceCommands", json.encode(dataTab),HData.SIDS.CHILD, k )
+							break
 						end	
-						var.Set("DeviceCommands", json.encode(dataTab),HData.SIDS.CHILD, k )
-						break
-					end	
+					end
+				else
+					-- Is a Hue lamp device. No action needed.
 				end
 			end
 		end	
@@ -3093,6 +3109,8 @@ function HTTP_Harmony (lul_request, lul_parameters)
 			res, data = Harmony_FindSequenceByID(cmdp1) 
 		elseif (cmd == 'issue_device_command') then 
 			res, data, cde, msg = Harmony_IssueDeviceCommand(cmdp1, cmdp2, cmdp3) 
+		elseif (cmd == 'issue_sequence_command') then 
+			res, data, cde, msg = Harmony_IssueSequenceCommand(cmdp1) 
 		else 
 			res = false
 			cde = 501
