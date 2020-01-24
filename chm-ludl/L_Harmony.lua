@@ -2,8 +2,10 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.16 3 January 2020
+	V3.17 23 January 2020
 	
+	V3.17 Changes:
+				WebSocket connect now checks for wrong RemoteID and tries to update. Happens after replacing Hub.
 	V3.16 Changes:
 				Avoid possible busy deadlock if messages from Harmony are missed.
 				Surpressing confusing log message on UpdateConfig on devices that are Hue lights.
@@ -199,7 +201,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.16",
+	Version = "3.17",
 	UIVersion = "3.5",
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -876,13 +878,13 @@ local function wsAPI()
 		ipa = host
 		port = port
 		if state ~= sv.CLOSED then
-			return nil,'wrong state',nil
+			return nil,1006,'wrong state'
 		end
 		sock = socket.tcp()
 		local _,err = sock:connect(host,port)
 		if err then
 			sock:close()
-			return nil,err,nil
+			return nil,4001,err
 		end
 		sock:settimeout(30)
 		local key = "IVEs+XMFJmzMFU/4qqJEqw=="  -- We use a fixed key
@@ -895,22 +897,29 @@ local function wsAPI()
 			}
 		local n,err = sock:send(req)
 		if n ~= #req then
-			return nil,err,nil
+			return nil,4002,err
 		end
 		local hdr_ok = false
+		local id_ok = true
 		repeat
 			local line,err = sock:receive('*l')
 			if err then
-				return nil,err,nil
+				return nil,4003,err
 			end
 			-- if we receive HTTP/1.1 101 Switching Protocols then assume connect is ok.
+			-- When Hub is replaced, a different RemoteID is required.
 			if line == "HTTP/1.1 101 Switching Protocols" then hdr_ok = true end
+			if line == "HTTP/1.1 401 Wrong hubId" then id_ok = false end
 		until line == ''
 		if not hdr_ok then
-			return nil,'Websocket Handshake failed'
+			if id_ok then
+				return nil,4005,'Websocket Handshake failed'
+			else
+				return nil,4006,'Wrong hub RemoteID'
+			end
 		end
 		state = sv.OPEN
-		return true
+		return true, 4000, "OK"
 	end
 
 	local ws_is_connected = function()
@@ -964,7 +973,14 @@ local function HarmonyAPI()
 			log.Debug("We should have web-socket open.")
 			return true, 200
 		else
-			local res, prot, hdrs = ws_client.connect(ipa,port,format("/?domain=%s&hubId=%s",hub_data.domain,hub_data.remote_id))
+			local res, err, msg = ws_client.connect(ipa,port,format("/?domain=%s&hubId=%s",hub_data.domain,hub_data.remote_id))
+			-- Check for wrong remote ID, get that again if wrong and retry
+			if not res and err == 4006 then
+				log.Warning("Hub reports wrong RemoteID %s, trying to renew value.", hub_data.remote_id)
+				hub_data.remote_id = ""
+				GetHubDetails()
+				res, err, msg = ws_client.connect(ipa,port,format("/?domain=%s&hubId=%s",hub_data.domain,hub_data.remote_id))
+			end
 			if res then
 				log.Debug("Web-socket to Hub is opened...")
 				last_command_ts = os.time()
@@ -974,8 +990,8 @@ local function HarmonyAPI()
 					luup.call_delay("HH_message_loop",1)
 				end
 				return true, 200
-			else	
-				log.Error("Connect, failed to open web-socket to hub %s, err %s.",ipa,prot or "")
+			else
+				log.Error("Connect, failed to open web-socket to hub %s, err %s.",ipa,msg or "")
 			end
 			ws_client.close()
 		end	
@@ -1161,7 +1177,7 @@ local function HarmonyAPI()
 	end	
 	
 	-- Return the details about the Hub. Get from Hub if not yet known. This is done before the Web-socket is opened.
-	local GetHubDetails = function()
+	GetHubDetails = function()
 		if hub_data.remote_id ~= "" and hub_data.domain ~= "" then
 			return true, hub_data
 		else
@@ -3783,7 +3799,7 @@ function Harmony_init(lul_device)
 			utils.ReloadLuup()
 		end
 	else
-		-- See if a rewrite of teh static JSON files is needed.
+		-- See if a rewrite of the static JSON files is needed.
 		local forcenewjson = false
 		-- See if we are upgrading UI settings, if so force rewrite of JSON files. V2.28
 		local version = var.Get("UIVersion")
@@ -3875,7 +3891,7 @@ function Harmony_init(lul_device)
 		utils.SetLuupFailure(2, HData.DEVICE)
 		return false, "Hub connection set-up failed. Check IP Address.", HData.Description
 	end
-	log.Info("Changing Harmony Hub: IP address %s.",ipAddress)
+	log.Info("Connecting to Harmony Hub: IP address %s.",ipAddress)
 	-- If starting with polling disabled, no connection is made with the Hub until the first command is send or polling gets enabled again.
 	local poll = (var.GetNumber("HubPolling") == 1)
 	local remoteID = var.Get("RemoteID")  -- Pass any known remote ID.
@@ -3894,10 +3910,10 @@ function Harmony_init(lul_device)
 		if res then
 			remoteID = data.remote_id or ""
 			remoteDomain = data.domain or ""
-			var.Set("RemoteID", data.remote_id)	
-			var.Set("AccountID", data.account_id)	
-			var.Set("Domain", data.domain)	
-			var.Set("email", data.email)	
+			var.Set("RemoteID", remoteID)
+			var.Set("AccountID", data.account_id or "")
+			var.Set("Domain", remoteDomain)
+			var.Set("email", data.email or "")
 --			var.Set("FriendlyName", data.friendly_name)	not available in Harmony Hub version 4.15.250
 		else
 			setStatusIcon(HData.Icon.ERROR)
