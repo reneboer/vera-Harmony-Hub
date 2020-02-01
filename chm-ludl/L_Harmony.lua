@@ -2,10 +2,14 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V3.17 23 January 2020
+	V3.18 2 February 2020
 	
+	V3.18 Changes:
+				Minor fix for UI5 so it will not call luup.devicemessage
+				Removed number to force logging.
 	V3.17 Changes:
 				WebSocket connect now checks for wrong RemoteID and tries to update. Happens after replacing Hub.
+				-- Note, variable RemoteID does not yet get updated, so refresh is done every time. (make standard?)
 	V3.16 Changes:
 				Avoid possible busy deadlock if messages from Harmony are missed.
 				Surpressing confusing log message on UpdateConfig on devices that are Hue lights.
@@ -201,7 +205,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = "3.17",
+	Version = "3.18",
 	UIVersion = "3.5",
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -361,10 +365,10 @@ local taskHandle = -1
 		end
 	end	
 
-	local function _init(prefix, level,onol)
+	local function _init(prefix, level, onol)
 		_update(level)
 		def_prefix = prefix
-		onOpenLuup = onol
+		onOpenLuup = (onol and true) or false
 	end	
 	
 	-- Build logging string safely up to given length. If only one string given, then do not format because of length limitations.
@@ -3688,9 +3692,9 @@ function Harmony_init(lul_device)
 	cnfgFile = ConfigFilesAPI()
 	Harmony = HarmonyAPI()
 	var.Initialize(HData.SIDS.MODULE, HData.DEVICE)
-	var.Default("LogLevel", 1)
-	log.Initialize(HData.Description, var.GetNumber("LogLevel") + 100)
 	utils.Initialize()
+	var.Default("LogLevel", 1)
+	log.Initialize(HData.Description, var.GetNumber("LogLevel"),(utils.GetUI() == utils.IsOpenLuup or utils.GetUI() == utils.IsUI5))
 
 	SetBusy(true,false)
 	var.Set("LinkStatus","Starting...")
@@ -3711,7 +3715,6 @@ function Harmony_init(lul_device)
 		maxBtn = HData.MaxButtonUI5
 		isUI7 = false
 	end
-	
 	cnfgFile.Initialize(HData.f_path, isUI7, HData.onOpenLuup, maxBtn, HData.RemoteIconURL, locIconURI, HData.Images, HData.DEVICE, HData.SIDS.MODULE, HData.SIDS.CHILD)
 	
 	-- See if user disabled plug-in 
