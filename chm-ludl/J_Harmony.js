@@ -407,19 +407,23 @@ var Harmony = (function (api) {
 
 		// If we have changes, update buttons.
 		if (bChanged) {
-			application.sendCommandSaveUserData(true);
-			api.performLuActionOnDevice(deviceID, HAM_SID, 'UpdateButtons', {});
+//			application.sendCommandSaveUserData(true);
+			// On Vera Wait a second to send the actual action, as it may have issues not saving all data on time.
 			var deviceObj = api.getDeviceObject(deviceID);
 			if (getTargetControllerType(deviceObj)) {
-				// Vera requires static JSON rewrite and reload.
 				setTimeout(function() {
-					showBusy(false);
-					htmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!",false);
-				}, 3000);	
+					api.performLuActionOnDevice(deviceID, HAM_SID, 'UpdateButtons', {});
+					// Vera requires static JSON rewrite and reload.
+					setTimeout(function() {
+						showBusy(false);
+						htmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!",false);
+					}, 5000);
+				}, 1000);
 			} else {
+				api.performLuActionOnDevice(deviceID, HAM_SID, 'UpdateButtons', {});
 				showBusy(false);
 				htmlSetMessage("Changes to the buttons made.<br>Refresh your browser page!",false);
-			}
+			}	
 		} else {
 			showBusy(false);
 			htmlSetMessage("You have not changed any values.<br>No changes to the buttons made.",true);
@@ -459,20 +463,23 @@ var Harmony = (function (api) {
 		}
 		// If we have changes, update buttons.
 		if (bChanged) {
+//			application.sendCommandSaveUserData(true);
 			// Wait a second to send the actual action, as it may have issues not saving all data on time.
 			var deviceObj = api.getDeviceObject(deviceID);
-			application.sendCommandSaveUserData(true);
-			api.performLuActionOnDevice(deviceID, HAM_CHSID, 'UpdateDeviceButtons', {});
 			if (getTargetControllerType(deviceObj)) {
-				// Vera requires static JSON rewrite and reload.
 				setTimeout(function() {
-					showBusy(false);
-					htmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!",false);
-				}, 3000);	
+					api.performLuActionOnDevice(deviceID, HAM_CHSID, 'UpdateDeviceButtons', {});
+					// Vera requires static JSON rewrite and reload.
+					setTimeout(function() {
+						showBusy(false);
+						htmlSetMessage("Changes to the buttons made.<br>Now wait for reload to complete and then refresh your browser page!",false);
+					}, 5000);	
+				}, 1000);
 			} else {
+				api.performLuActionOnDevice(deviceID, HAM_CHSID, 'UpdateDeviceButtons', {});
 				showBusy(false);
 				htmlSetMessage("Changes to the buttons made.<br>Refresh your browser page!",false);
-			}
+			}	
 		} else {
 			showBusy(false);
 			htmlSetMessage("You have not made any changes.<br>No changes to the buttons made.",true);
