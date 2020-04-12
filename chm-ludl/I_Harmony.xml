@@ -2,7 +2,7 @@
 <!-- 
 	Module I_Harmony.xml
 	Written by R.Boer. 
-	V3.11, 17 September 2019
+	V4.00, 12 April 2020
 -->
 <implementation>
 	<specVersion>
@@ -170,7 +170,7 @@
 			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
 			<name>IssueDeviceCommand</name>
 			<job>
-				local res, data, cde, msg = Harmony_IssueDeviceCommand(lul_settings.DeviceID or "", lul_settings.Command or "", lul_settings.Duration or "0")
+				local res, data, cde, msg = Harmony_IssueDeviceCommand(lul_settings.DeviceID or "", lul_settings.Command or "", lul_settings.Duration or 0)
 				-- Check for busy state
 				if not res then
 					if cde == 307 then return 3, nil end
@@ -196,7 +196,7 @@
 			<serviceId>urn:rboer-com:serviceId:HarmonyDevice1</serviceId>
 			<name>SendDeviceCommand</name>
 			<job>
-				local res, data, cde, msg = Harmony_SendDeviceCommand(lul_device,lul_settings.Command or "",lul_settings.Duration or "0")
+				local res, data, cde, msg = Harmony_SendDeviceCommand(lul_device, lul_settings.Command or "", lul_settings.Duration or 0)
 				-- Check for busy state
 				if not res then
 					if cde == 307 then return 3, nil end

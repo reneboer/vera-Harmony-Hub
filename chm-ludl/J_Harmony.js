@@ -1,8 +1,10 @@
 //# sourceURL=J_Harmony.js
 /* harmony Hub Control UI
  Written by R.Boer. 
- V3.11 17 September 2019
+ V4.00 12 April 2019
 
+ V4.00 Changes:
+		Added Activity child devices.
  V3.11 Changes:
 		Fix for Save changes in _UpdateDeviceSettings.
  V3.9 Changes:
@@ -14,54 +16,40 @@
 		Removed remote images option for openLuup as ALTUI handles images properly.
 		Changed Settings panel to no longer need a Save button and minimize reloads.
 		Default js is now for UI7 and openLuup.
-
  V3.3 Changes:
 		Added support for automation devices. For now Lamps only.
-
  V3.0 Changes:
 		Changed to WebSockets API, no longer need for uid,pwd and polling settings.
 		Activities, Devices and Commands are now in variable, no need for HTTP handler.
-
  V2.22 Changes:
 		Fix for ALTUI on saving settings.
-
  V2.21 Changes:
 		Suspend Poll when away has added option to only stop when CurrentActivityID is -1 (all off).
-
  V2.20 Changes:
 		Support for Home poll only option.
-  	Removed syslog support
+		Removed syslog support
 		Nicer look on ALTUI
-
  V2.19 Changes:
 		IP Address is now stored in normal variable, no longer in device IP attribute.
-
  V2.16 Changes:
 		Changed call to request data from Vera Handlers.
-
  V2.15 Changes:
 		New settings option to wait on Hub to fully complete the start of an activity or not.
-
  V2.13-1 Changes:
 		The password input now has the HTML input type password so it won't show.
  		Some hints on poll frequency settings.
-
  V2.7 Changes:
 		User can disable plugin. Signal status on control panel.
 		No more reference to myInterface, using correct api.ui calls instead.
-
  V2.5 Changes:
 		Can define key-press duration for devices.
 		Some JQuery use. Layout improvements for native UI and ALTUI.
  		Changed poll and acknowledge settings to drop down selections.
 		Proper JSON returns from LUA.
-
  V2.4 Changes:
 		Some optimizations in Vera api calls that now work on UI7
-
  V2.1 Changes:
 		Added selection for time out.
-
  V2.02 Changes:
 		Removed options for MaxActivity and Device Buttons. Now just fixed.
 		Removed Enable Button Feedback option. Now uses Ok Acknowledge Interval value.
@@ -246,7 +234,7 @@ var Harmony = (function (api) {
 					}	
 					html += '</div><p>';
 					for (i=1; i<=HAM_MAXBUTTONS; i++) {
-						html += htmlAddMapping(deviceID, 'Button '+i+'&nbsp;&nbsp;Activity ID','ActivityID'+i,actSel,'Label','ActivityDesc'+i);
+						html += htmlAddMapping(deviceID, 'Button '+i+'&nbsp;&nbsp;Activity ID', 'ActivityID'+i, actSel, 'Label', 'ActivityDesc'+i);
 					}
 				} else {
 					html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
@@ -345,7 +333,7 @@ var Harmony = (function (api) {
 						'A reload command may be performed automatically.</div>'+
 						'<p>';
 					for (i=1; i<=HAM_MAXBUTTONS; i++) {
-						html += htmlAddMapping(deviceID, 'Button '+i+' Command','Command'+i,actSel,'Label','CommandDesc'+i, HAM_CHSID);
+						html += htmlAddMapping(deviceID, 'Button '+i+' Command', 'Command'+i, actSel, 'Label', 'CommandDesc'+i, HAM_CHSID);
 					}
 				} else {
 					html += '<table width="100%" border="0" cellspacing="3" cellpadding="0">'+
@@ -385,9 +373,12 @@ var Harmony = (function (api) {
 		// Save variable values so we can access them in LUA without user needing to save
 		var bChanged = false;
 		showBusy(true);
+		var curChilds = varGet(deviceID, 'PluginHaveActivityChildren');
+		var ncArr = [];
 		for (var icnt=1; icnt <= HAM_MAXBUTTONS; icnt++) {
 			var idval = htmlGetElemVal(deviceID, 'ActivityID'+icnt);
 			var labval = htmlGetElemVal(deviceID, 'ActivityDesc'+icnt);
+			var chldval = htmlGetElemVal(deviceID, 'ActivityID'+icnt+'Child');
 			var orgid = varGet(deviceID,'ActivityID'+icnt);
 			var orglab = varGet(deviceID,'ActivityDesc'+icnt);
 			// Check for empty Activity descriptions, and default to activity
@@ -400,11 +391,20 @@ var Harmony = (function (api) {
 				varSet(deviceID,'ActivityID'+icnt, idval);
 				bChanged=true;
 			}	
-			if (labval != orglab) {
+			if (labval != orglab && idval != '') {
 				varSet(deviceID,'ActivityDesc'+icnt, labval);
 				bChanged=true;
 			}	
+			if (chldval == 1 && idval != '') {
+				ncArr.push(idval);
+			}	
 		}
+		var newChilds = ncArr.join();
+		if (newChilds != curChilds) { 
+			varSet(deviceID,'PluginHaveActivityChildren', newChilds);
+			bChanged = true; 
+		}
+
 		// If we have changes, update buttons.
 		if (bChanged) {
 			application.sendCommandSaveUserData(true);
@@ -448,7 +448,7 @@ var Harmony = (function (api) {
 				varSet(deviceID,'Command'+icnt, idval, HAM_CHSID);
 				bChanged=true;
 			}
-			if (labval != orglab) {
+			if (labval != orglab && idval != '') {
 				varSet(deviceID,'CommandDesc'+icnt, labval, HAM_CHSID);
 				bChanged=true;
 			}	
@@ -550,32 +550,51 @@ var Harmony = (function (api) {
 	function htmlAddMapping(di, lb1, vr1, values, lb2, vr2, sid) {
 		try {
 			var selVal = varGet(di, vr1, sid);
-			var wdth = (bOnALTUI) ? 'style="width:160px;"' : '';  // Use on ALTUI
+//			var wdth = (bOnALTUI) ? 'style="width:140px;"' : '';  // Use on ALTUI
 			var html = '<div class="clearfix labelInputContainer">'+
-				'<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" '+wdth+'>'+lb1+'</div>'+
-				'<div class="pull-left customSelectBoxContainer" style="width:160px;">'+
-				'<select id="hamID_'+vr1+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:160px;">';
+				'<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="width:140px;">'+lb1+'</div>'+
+				'<div class="pull-left customSelectBoxContainer" style="width:140px;">'+
+				'<select id="hamID_'+vr1+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:140px;">';
 			for(var i=0;i<values.length;i++){
 				html += '<option value="'+values[i].value+'" '+((''+values[i].value==selVal)?'selected':'')+'>'+values[i].label+'</option>';
 			}
 			html += '</select>'+
 				'</div>';
-			html += '<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="margin-left:50px; width:40px;">'+lb2+'</div>'+
+			html += '<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="margin-left:30px; width:40px;">'+lb2+'</div>'+
 				'<div class="pull-left">'+
-					'<input class="customInput '+((bOnALTUI) ? 'altui-ui-input form-control form-control-sm' : '')+'" style="width:160px;" id="hamID_'+vr2+di+'" size="15" type="text" value="'+varGet(di,vr2,sid)+'">'+
+					'<input class="customInput '+((bOnALTUI) ? 'altui-ui-input form-control form-control-sm' : '')+'" style="width:140px;" id="hamID_'+vr2+di+'" size="15" type="text" value="'+varGet(di,vr2,sid)+'">'+
 				'</div>';
 			if (typeof sid != 'undefined') {
+				// Device Settings
 				var timeDuration = [{'value':'0','label':'Click'},{'value':'1','label':'1 Sec'},{'value':'2','label':'2 Sec'},{'value':'3','label':'3 Sec'},{'value':'4','label':'4 Sec'},{'value':'5','label':'5 Sec'}];
 				var selDur = varGet(di, 'Prs'+vr1, sid);
-				html += '<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="margin-left:50px; width:60px;">Press</div>'+
-				'<div class="pull-left customSelectBoxContainer" style="width:80px;">'+
-				'<select id="hamID_Prs'+vr1+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:80px;">';
+				if (selDur == '') { selDur = 0; }
+				html += '<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="margin-left:30px; width:60px;">Press</div>'+
+				'<div class="pull-left customSelectBoxContainer" style="width:70px;">'+
+				'<select id="hamID_Prs'+vr1+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:70px;">';
 				for(i=0;i<timeDuration.length;i++){
 					html += '<option value="'+timeDuration[i].value+'" '+((''+timeDuration[i].value==selDur)?'selected':'')+'>'+timeDuration[i].label+'</option>';
 				}
 				html += '</select>'+
 					'</div>';
-			}	
+			} else {
+				// Activity settings, see if activity ID already in PluginHaveActivityChildren to flag selected
+				var noYes = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
+				var curChild = varGet(di, 'PluginHaveActivityChildren');
+				var curVal = 0;
+				if (selVal != '') {
+					var ccArr = curChild.split(',');
+					curVal = (ccArr.includes(selVal)?1:0);
+				}	
+				html += '<div class="pull-left inputLabel '+((bOnALTUI) ? 'form-control form-control-sm form-control-plaintext' : '')+'" style="margin-left:30px; width:140px;">Activity Child Device</div>'+
+				'<div class="pull-left customSelectBoxContainer" style="width:70px;">'+
+				'<select id="hamID_'+vr1+'Child'+di+'" class="customSelectBox '+((bOnALTUI) ? 'form-control form-control-sm' : '')+'" style="width:70px;">';
+				for(i=0;i<noYes.length;i++){
+					html += '<option value="'+noYes[i].value+'" '+((''+noYes[i].value==curVal)?'selected':'')+'>'+noYes[i].label+'</option>';
+				}
+				html += '</select>'+
+					'</div>';
+			}
 			html += '</div>';
 			return html;
 		} catch (e) {
