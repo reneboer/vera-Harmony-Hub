@@ -1,8 +1,10 @@
 //# sourceURL=J_Harmony_UI5.js
 /* harmony Hub Control UI json for UI5/UI6
  Written by R.Boer. 
- V3.9 23 April 2019
+ V4.00 13 April 2019
 
+ V4.00 Changes:
+		Added Activity child devices.
  V3.9 Changes:
 		Clear Domain variable on IP address change.
 		Fix for missing variable val in hamhtmlAddInput.
@@ -81,7 +83,6 @@ function hamSettings(deviceID) {
 		html+= hamhtmlAddInput(deviceID, 'Harmony Hub IP Address', 30, 'HubIPAddress','UpdateSettingsCB')+
 		hamhtmlAddPulldown(deviceID, 'Ok Acknowledge Interval', 'OkInterval', timeAck, true)+
 		hamhtmlAddPulldown(deviceID, 'Default Activity', 'DefaultActivity', actSel, true)+
-//		hamhtmlAddPulldown(deviceID, 'Enable HTTP Request Handler', 'HTTPServer', yesNo, true)+
 		hamhtmlAddPulldown(deviceID, 'Enable Remote Icon Images', 'RemoteImages', yesNo, true)+
 		hamhtmlAddPulldown(deviceID, 'Log level', 'LogLevel', logLevel, true);
 	}	
@@ -247,11 +248,13 @@ function hamVarGet(deviceID, varID, sid) {
 function hamUpdateButtons(deviceID) {
 	// Save variable values so we can access them in LUA without user needing to save
 	var bChanged = false;
+	var ncArr = [];
 	for (icnt=1; icnt <= HAM_MAXBUTTONS; icnt++) {
-		var idval=hamhtmlGetElemVal(deviceID,'ActivityID'+icnt);
-		var labval=hamhtmlGetElemVal(deviceID,'ActivityDesc'+icnt);
-		var orgid = hamVarGet(deviceID,'ActivityID'+icnt);
-		var orglab = hamVarGet(deviceID,'ActivityDesc'+icnt);
+		var idval=hamhtmlGetElemVal(deviceID, 'ActivityID'+icnt);
+		var labval=hamhtmlGetElemVal(deviceID, 'ActivityDesc'+icnt);
+		var chldval = hamhtmlGetElemVal(deviceID, 'ActivityID'+icnt+'Child');
+		var orgid = hamVarGet(deviceID, 'ActivityID'+icnt);
+		var orglab = hamVarGet(deviceID, 'ActivityDesc'+icnt);
 		// Check for empty Activity descriptions, and default to activity
 		if (idval !== '' && labval === '') {
 			var s = document.getElementById('hamID_ActivityID'+icnt+deviceID);
@@ -262,10 +265,18 @@ function hamUpdateButtons(deviceID) {
 			hamSaveVariable(deviceID,'ActivityID'+icnt, idval);
 			bChanged=true;
 		}	
-		if (labval != orglab) {
+		if (labval != orglab && idval != '') {
 			hamSaveVariable(deviceID,'ActivityDesc'+icnt, labval);
 			bChanged=true;
 		}	
+		if (chldval == 1 && idval != '') {
+			ncArr.push(idval);
+		}	
+	}
+	var newChilds = ncArr.join();
+	if (newChilds != curChilds) { 
+		hamSaveVariable(deviceID,'PluginHaveActivityChildren', newChilds);
+		bChanged = true; 
 	}
 	// If we have changes, update buttons.
 	if (bChanged) {
@@ -445,7 +456,24 @@ function hamhtmlAddMapping(di, lb1, vr1, values, lb2, vr2, sid) {
 		}
 		html += '</select>'+
 			'</td>';
-	}	
+	} else {
+		// Activity settings, see if activity ID already in PluginHaveActivityChildren to flag selected
+		var noYes = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
+		var curChild = hamVarGet(di, 'PluginHaveActivityChildren');
+		var curVal = 0;
+		if (selVal != '') {
+			var ccArr = curChild.split(',');
+			curVal = (ccArr.includes(selVal)?1:0);
+		}	
+		html += '<td">Activity Child Device</td>'+
+		'<td>'+
+		'<select id="hamID_'+vr1+'Child'+di+'">';
+		for(i=0;i<noYes.length;i++){
+			html += '<option value="'+noYes[i].value+'" '+((''+noYes[i].value==curVal)?'selected':'')+'>'+noYes[i].label+'</option>';
+		}
+		html += '</select>'+
+			'</td>';
+	}
 	html += '</tr>';
 	return html;
 }
