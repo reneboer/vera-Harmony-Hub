@@ -2,14 +2,17 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V4.00 12 April 2020
+	V4.1 16 April 2020
 	
-	V4.00 Changes:
+	V4.1 Changes:
+				Improved reconnect handling.
+				Use of cjson if available (aprox 10x faster) than dkjson. Dropped own json version.
+	V4.0 Changes:
 				Added Child devices for activities that can hold all command for the Activity as well as its sequences.
 				Added list_activity_commands (for http handler)
 				SendDeviceCommand can now handle Device and Activity childs, and Sequences (only by Name) for Activity childs. Required for GUI handling.
-				Improved variable and log module. (done, to test on Vera)
-				Eliminated some sleep statments. (done, to test on Vera)
+				Improved variable and log module.
+				Eliminated some sleep statements.
 	V3.18 Changes:
 				Minor fix for UI5 so it will not call luup.devicemessage
 				Removed number to force logging.
@@ -198,10 +201,10 @@ local url		= require("socket.url")
 local socket	= require("socket")
 local mime		= require("mime")
 local lfs		= require("lfs")
-local json		= require("dkjson")
+local json		= require("cjson")
 if (type(json) == "string") then
-	luup.log("Harmony warning dkjson missing, falling back to harmony_json", 2)
-	json		= require("harmony_json")
+	luup.log("Harmony warning cjson missing, falling back to dkjson", 2)
+	json		= require("dkjson")
 end
 local bit		= require('bit')
 if (type(bit) == "string") then
@@ -211,7 +214,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = 4.0,
+	Version = 4.1,
 	UIVersion = 3.5,
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -1097,6 +1100,7 @@ local function HarmonyAPI()
 				last_command_ts = os.time()
 				if polling_enabled then
 					-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
+					log.Debug("polling is enabled.")
 					luup.call_delay("HH_ping_loop",30)
 					luup.call_delay("HH_message_loop",1)
 				end
@@ -1160,13 +1164,20 @@ local function HarmonyAPI()
 	
 	-- Wrapper for Connect call we can delay.
 	local HH_reconnect = function(poll_flg)
+		log.Debug("HH_reconnect, poll_flg %s", poll_flg or "0")
 		polling_enabled = (poll_flg == "1")
-		Connect()
-		local res, act, err, msg = GetCurrentActivtyID()
+		local res, act, err, msg = Connect()
 		if res then
-			log.Debug("Re-connect, current activity found %s", act)
+			res, act, err, msg = GetCurrentActivtyID()
+			if res then
+				log.Debug("Re-connect, current activity found %s", act)
+			else
+				log.Warning("Re-connect, could not get current activity. Error %s, msg %s", err, msg)
+			end
 		else
-			log.Warning("Re-connect, could not get current activity. Error %s, msg %s", err, msg)
+			log.Debug("Re-connect failed, try again in one minute") 
+			polling_enabled = false
+			luup.call_delay("HH_reconnect",60,"1")
 		end
 	end
 
@@ -2487,7 +2498,6 @@ function Harmony_UpdateConfigurations()
 			seq.sequences[i] = {}
 			seq.sequences[i].ID = dsi.id
 			seq.sequences[i].Name = dsi.name
-log.Debug("Sequence %d, val: %s", i, json.encode(dsi))			
 		end
 		var.SetJson("Sequences", seq)
 		-- Get commands for child devices
@@ -3021,7 +3031,7 @@ local function Harmony_UpdateLampStatus(chdev, data)
 		if (dv.on) then var.Set("LoadLevelLast", bri, HData.SIDS.DIM, chdev) end
 		var.SetNumber("LoadLevelTarget", bri, HData.SIDS.DIM, chdev)
 		var.SetNumber("LoadLevelStatus", bri, HData.SIDS.DIM, chdev)
-		local usw = var.GetNumber("UserSuppliedWattage", HData.SIDS.EM, chdev)
+		local usw = var.GetNumber("UserSuppliedWattage", HData.SIDS.EM, chdev) or 0
 		if usw > 0 then var.SetNumber("Watts", (usw * bri) / 100, HData.SIDS.EM, chdev) end
 		if dv.color then
 			local w,d,r,g,b=0,0,0,0,0
@@ -4092,6 +4102,7 @@ function Harmony_init(lul_device)
 			-- Delay reload for 5 secs, just in case we have multiple plug in copies that try to migrate. They must all have time to finish.
 			luup.call_delay("Harmony_Reload", 5)
 		end
+		var.SetNumber("UIVersion", HData.UIVersion)
 	else
 		-- See if a rewrite of the static JSON files is needed.
 		local forcenewjson = false
