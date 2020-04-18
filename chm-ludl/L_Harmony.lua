@@ -2,13 +2,14 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V4.1 17 April 2020
+	V4.2 18 April 2020
 	
+	V4.2 Changes:
+				Added get_automation_config (for http handler)
 	V4.1 Changes:
 				Improved reconnect handling.
 				Use of cjson if available (aprox 10x faster) than dkjson. Dropped own json version.
 				Support for compact device configuration
-				Added get_automation_config (for http handler)
 	V4.0 Changes:
 				Added Child devices for activities that can hold all command for the Activity as well as its sequences.
 				Added list_activity_commands (for http handler)
@@ -216,7 +217,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = 4.1,
+	Version = 4.2,
 	UIVersion = 3.5,
 	DEVICE = "",
 	Description = "Harmony Control",
