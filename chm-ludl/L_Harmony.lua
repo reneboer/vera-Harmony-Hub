@@ -2,11 +2,12 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V4.1 16 April 2020
+	V4.1 17 April 2020
 	
 	V4.1 Changes:
 				Improved reconnect handling.
 				Use of cjson if available (aprox 10x faster) than dkjson. Dropped own json version.
+				Support for compact device configuration
 	V4.0 Changes:
 				Added Child devices for activities that can hold all command for the Activity as well as its sequences.
 				Added list_activity_commands (for http handler)
@@ -21,7 +22,7 @@
 				-- Note, variable RemoteID does not yet get updated, so refresh is done every time. (make standard?)
 	V3.16 Changes:
 				Avoid possible busy deadlock if messages from Harmony are missed.
-				Surpressing confusing log message on UpdateConfig on devices that are Hue lights.
+				Suppressing confusing log message on UpdateConfig on devices that are Hue lights.
 				Added missing issue_sequence_command to http handler.
 	V3.15 Changes:
 				Improve polling routines, code cleanup
@@ -1847,7 +1848,6 @@ local function ConfigFilesAPI()
 		end
 		str = str .. format('\n"Label": { "text": "%s" },\n',btnLab)
 		if isChild then
-			if btnDur == '' then btnDur = '0' end
 			str = str .. format('"Display": { "Service": "%s", "Variable": "LastDeviceCommand", "Value": "%s", "Top": %d, "Left": %d, "Width": %d, "Height": 20 },\n',ChSid,btnID,cTop,cLeft,cWidth)
 			str = str .. format('"Command": { "Service": "%s", "Action": "SendDeviceCommand", "Parameters": [{ "Name": "Command", "Value": "%s"},{ "Name": "Duration", "Value": "%s" }] },\n',ChSid,btnID,btnDur)
 		else
@@ -2533,17 +2533,23 @@ function Harmony_UpdateConfigurations()
 								dataTab.Functions[j].Function = cgi.name
 								dataTab.Functions[j].Commands = {}
 								for x = 1, #cgi['function'] do
-									dataTab.Functions[j].Commands[x] = {}
-									dataTab.Functions[j].Commands[x].Label = cgi['function'][x].label
-									dataTab.Functions[j].Commands[x].Name = cgi['function'][x].name
 									local act = json.decode(cgi['function'][x].action)
-									dataTab.Functions[j].Commands[x].Action = act.command
+									local actStr = act.command
+									dataTab.Functions[j].Commands[x] = {}
+									dataTab.Functions[j].Commands[x].Action = actStr
+									-- Optimize storage if strings are identical (many are)
+									if cgi['function'][x].label ~= actStr then
+										dataTab.Functions[j].Commands[x].Label = cgi['function'][x].label
+									end
+									if cgi['function'][x].name ~= actStr then
+										dataTab.Functions[j].Commands[x].Name = cgi['function'][x].name
+									end
 									if isAct then dataTab.Functions[j].Commands[x].DeviceID = act.deviceId end
 								end
 							end	
 							-- See if activity has sequences
 							if isAct then
-								if dpi.sequences and dpi.sequences ~= {} then
+								if dpi.sequences and #dpi.sequences ~= 0 then
 									local j = #dataTab.Functions + 1
 									dataTab.Functions[j] = {}
 									dataTab.Functions[j].Function = "Sequences"
@@ -3435,15 +3441,15 @@ local function Harmony_GetButtonData(devID,sid,isChild)
 	local buttons = {}
 	if (utils.GetUI() < utils.IsUI7) then maxBtn = HData.MaxButtonUI5 end
 	for i = 1, maxBtn do
-		local id, lab, dur, chld = "","",0,0
+		local id, lab, dur, chld = "","","0","0"
 		if isChild == false then
 			id = var.Get("ActivityID"..i,sid,devID) or ""
 			lab = var.Get("ActivityDesc"..i,sid,devID) or ""
-			if id ~= "" then chld = var.Get("ActivityID"..i.."Child",sid,devID) or '' end
+			if id ~= "" then chld = var.Get("ActivityID"..i.."Child",sid,devID) or "0" end
 		else
 			id = var.Get("Command"..i,sid,devID) or ""
 			lab = var.Get("CommandDesc"..i,sid,devID) or ""
-			if id ~= "" then dur = var.GetNumber("PrsCommand"..i,sid,devID) end
+			if id ~= "" then dur = var.GetNumber("PrsCommand"..i,sid,devID) or "0" end
 		end
 		if id ~= "" and lab ~= "" then 
 			local numBtn = #buttons + 1

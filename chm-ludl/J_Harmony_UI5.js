@@ -1,9 +1,11 @@
 //# sourceURL=J_Harmony_UI5.js
 /* harmony Hub Control UI json for UI5/UI6
  Written by R.Boer. 
- V4.00 13 April 2019
+ V4.1 17 April 2019
 
- V4.00 Changes:
+ V4.1 Changes:
+		Support for compact device configuration
+ V4.0 Changes:
 		Added Activity child devices.
  V3.9 Changes:
 		Clear Domain variable on IP address change.
@@ -205,7 +207,9 @@ function hamDeviceSettings(deviceID) {
 			var actSel = [{ 'value':'','label':'None'}];
 			for (var i=0; i<funcs.length; i++) {
 				for (var j=0; j<funcs[i].Commands.length; j++) {
-					actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
+					var act = funcs[i].Commands[j].Action;
+					var lab = ((typeof(funcs[i].Commands[j].Label) == 'undefined')?act:funcs[i].Commands[j].Label);
+					actSel.push({'value':act,'label':lab});
 				}	
 			}	
 			html = '<table border="0" cellpadding="0" cellspacing="3" width="100%"><tbody>'+

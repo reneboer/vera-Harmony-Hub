@@ -1,9 +1,11 @@
 //# sourceURL=J_Harmony.js
 /* harmony Hub Control UI
  Written by R.Boer. 
- V4.00 12 April 2019
+ V4.1 17 April 2019
 
- V4.00 Changes:
+ V4.1 Changes:
+		Support for compact device configuration
+ V4.0 Changes:
 		Added Activity child devices.
  V3.11 Changes:
 		Fix for Save changes in _UpdateDeviceSettings.
@@ -121,7 +123,7 @@ var Harmony = (function (api) {
 			var deviceObj = api.getDeviceObject(deviceID);
 			var timeAck = [{'value':'0','label':'None'},{'value':'1','label':'1 Sec'},{'value':'2','label':'2 Sec'},{'value':'3','label':'3 Sec'}];
 			var yesNo = [{'value':'0','label':'No'},{'value':'1','label':'Yes'}];
-			var logLevel = [{'value':'1','label':'Error'},{'value':'2','label':'Warning'},{'value':'8','label':'Info'},{'value':'11','label':'Debug'}];
+			var logLevel = [{'value':'1','label':'Error'},{'value':'2','label':'Warning'},{'value':'8','label':'Info'},{'value':'11','label':'Debug'},{'value':'101','label':'Develop'}];
 			var actSel = [{ 'value':'','label':'None'}];
 			for (var i=1; i<=HAM_MAXBUTTONS; i++) {
 				var actID = varGet(deviceID,'ActivityID'+i);
@@ -323,7 +325,10 @@ var Harmony = (function (api) {
 					var actSel = [{ 'value':'','label':'None'}];
 					for (var i=0; i<funcs.length; i++) {
 						for (var j=0; j<funcs[i].Commands.length; j++) {
-							actSel.push({ 'value':funcs[i].Commands[j].Action,'label':funcs[i].Commands[j].Label});
+							// If Label is not defined, it is the same as action.
+							var act = funcs[i].Commands[j].Action;
+							var lab = ((typeof(funcs[i].Commands[j].Label) == 'undefined')?act:funcs[i].Commands[j].Label);
+							actSel.push({ 'value':act,'label':lab});
 						}	
 					}
 					html += '<b>Device Command mappings</b>'+
