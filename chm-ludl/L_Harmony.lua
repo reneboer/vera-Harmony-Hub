@@ -2,8 +2,11 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V4.2 18 April 2020
+	V4.3 21 April 2020
 	
+	V4.3 Changes:
+				json wrapper as cjson is a bit too sensitive to json file errors and has different return values than dkjson. Thanks to akbooer.
+				Fix for correct StopPolling.
 	V4.2 Changes:
 				Added get_automation_config (for http handler)
 	V4.1 Changes:
@@ -204,12 +207,10 @@ local url		= require("socket.url")
 local socket	= require("socket")
 local mime		= require("mime")
 local lfs		= require("lfs")
-local json		= require("cjson")
-if (type(json) == "string") then
-	luup.log("Harmony warning cjson missing, falling back to dkjson", 2)
-	json		= require("dkjson")
-end
 local bit		= require("bit")
+local cjson 	= require("cjson")
+local dkjson 	= require("dkjson")
+
 if (type(bit) == "string") then
 	bit			= require("bit32")
 end
@@ -217,7 +218,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = 4.2,
+	Version = 4.3,
 	UIVersion = 3.5,
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -275,6 +276,7 @@ local JobStatus = {
 ---------------------------------------------------------------------------------------------
 -- Utility functions
 ---------------------------------------------------------------------------------------------
+local json
 local log
 local var
 local utils
@@ -338,7 +340,13 @@ local function varAPI()
 			luup.log("var.GetJson: empty data value :"..(value or "").." for variable "..(name or "unknown"), 2)
 			return {}
 		end
-		return json.decode(value)
+		local res, msg = json.decode(value)
+		if res then 
+			return res
+		else
+			luup.log("var.GetJson: failed to decode json :"..(value or "").." for variable "..(name or "unknown"), 2)
+			return {}
+		end
 	end
 
 	-- Set variable value
@@ -767,7 +775,41 @@ local _OpenLuup = 99
 	}
 end 
 
+-- Wrapper for more solid handling for cjson as it trows a bit more errors that I'd like.
+local function jsonAPI()
+local is_cj, is_dk
 
+	local function _init()
+		is_cj = type(cjson) == "table"
+		is_dk = type(dkson) == "table"
+--		is_cj, cjson = pcall(require, "cjson")
+--		is_dk, dkjson = pcall(require, "dkjson")
+	end
+	
+	local function _decode(data)
+		if is_cj then
+			local ok, res = pcall(cjson.decode, data)
+			if ok then return res end
+		end
+		local res, pos, msg = dkjson.decode(data)
+		return res, msg
+	end
+	
+	local function _encode(data)
+		-- No special chekcing required as we must pass valid data our selfs
+		if is_cj then
+			return cjson.encode(data)
+		else
+			return dkjson.encode(data)
+		end
+	end
+	
+	return {
+		Initialize = _init,
+		decode = _decode,
+		encode = _encode
+	}
+end
 
 --[[
 	Minimal WebSocket client API. Taken from lua-websockets library http://lipp.github.io/lua-websockets/
@@ -1068,7 +1110,7 @@ local function HarmonyAPI()
 	local hub_data = { remote_id = "", friendly_name = "", email = "", account_id = "", domain = "" }
 	local callBacks = {}
 	local jobStat = JobStatus.NO_JOB
-	local polling_enabled = false
+	local polling_enabled = 0			-- 0 no polling, 1 polling, 2 cancel if polling
 	local cbFunction = nil				-- Can register callback function for acync messages and messages not handled by default flow
 	local format = string.format
 	local slen = string.len
@@ -1101,7 +1143,7 @@ local function HarmonyAPI()
 			if res then
 				log.Debug("Web-socket to Hub is opened...")
 				last_command_ts = os.time()
-				if polling_enabled then
+				if polling_enabled == 1 then
 					-- Kick-off the ping and message loop to keep the connection active and to handle async messages 
 					log.Debug("polling is enabled.")
 					luup.call_delay("HH_ping_loop",30)
@@ -1140,7 +1182,7 @@ local function HarmonyAPI()
 		end	
 		if cmd == "harmony.engine?startActivityFinished" then
 			-- An activity has started, make job as done. Close connection if not polling.
-			if not polling_enabled then Close() end
+			if polling_enabled == 0 then Close() end
 			jobStat = JobStatus.NO_JOB
 		end
 		return true
@@ -1148,11 +1190,11 @@ local function HarmonyAPI()
 
 	-- Check for waiting messages from the Hub and process them.
 	local HH_message_loop = function()
-		if polling_enabled then
+		if polling_enabled == 1 then
 			while ws_client.message_waiting() do
 				local response, op = ws_client.receive()
 				if response then
-					local data, _, errMsg = json.decode(response)
+					local data, errMsg = json.decode(response)
 					if data then
 						HH_HandleCallBack(data)
 					else
@@ -1165,29 +1207,43 @@ local function HarmonyAPI()
 		end
 	end
 	
-	-- Wrapper for Connect call we can delay.
+	-- Wrapper for Connect call we can delay. Call with -1 to cancel.
 	local HH_reconnect = function(poll_flg)
-		log.Debug("HH_reconnect, poll_flg %s", poll_flg or "0")
-		polling_enabled = (poll_flg == "1")
-		local res, act, err, msg = Connect()
-		if res then
-			res, act, err, msg = GetCurrentActivtyID()
+		local poll_flg = tonumber(poll_flg,10) or 0
+		log.Debug("HH_reconnect, poll_flg %d, polling _enabled %d", poll_flg, polling_enabled)
+		if poll_flg == -1 then
+			log.Debug("Canceling Reconnect.")
+			polling_enabled = 2
+			-- Schedule stops that may still be pending
+--			luup.call_delay("HH_reconnect",5,"0")
+			return true, nil, 200, "Canceling reconnect"
+		elseif polling_enabled == 2 or poll_flg == 0 then
+			log.Debug("Reconnect canceled. Do nothing.")
+			polling_enabled = 0
+			return true, nil, 200, "Reconnect canceled"
+		else	
+			polling_enabled = 1
+			local res, act, err, msg = Connect()
 			if res then
-				log.Debug("Re-connect, current activity found %s", act)
+				res, act, err, msg = GetCurrentActivtyID()
+				if res then
+					log.Debug("Reconnect, current activity found %s", act)
+				else
+					log.Warning("Reconnect, could not get current activity. Error %s, msg %s", err, msg)
+				end
+				return res, act, err, msg
 			else
-				log.Warning("Re-connect, could not get current activity. Error %s, msg %s", err, msg)
+				log.Debug("Reconnect failed, try again in one minute")
+				polling_enabled = 0
+				luup.call_delay("HH_reconnect",60,"1")
 			end
-		else
-			log.Debug("Re-connect failed, try again in one minute") 
-			polling_enabled = false
-			luup.call_delay("HH_reconnect",60,"1")
 		end
 	end
 
 	-- To keep the connection to the Hub open send a ping each 45 seconds or 45 seconds after the last command.
 	--	  When polling is disabled, then close the connection to the Hub.
 	local HH_ping_loop = function()
-		if polling_enabled then
+		if polling_enabled == 1 then
 			local next_poll = os.difftime(os.time(),last_command_ts)
 			if next_poll == 0 then
 				if os.difftime(os.time(),last_ping_success) > 40 then
@@ -1211,7 +1267,7 @@ local function HarmonyAPI()
 					if os.difftime(os.time(),last_ping_success) > 600 then
 						log.Debug("Failed to ping hub for more than five minutes, trying to re-open connection.")
 						-- By disabing polling for reconnect, we avoid double message loop to occure after reconnect.
-						polling_enabled = false
+						polling_enabled = 0
 						Close()
 						luup.call_delay("HH_reconnect", 5, "1")
 					else	
@@ -1236,7 +1292,7 @@ local function HarmonyAPI()
 			if response then
 --log.Debug("ws_client.receive response: "..(response:sub(1,1000) or ""))
 				last_command_ts = os.time()
-				local data, _, errMsg = json.decode(response)
+				local data, errMsg = json.decode(response)
 				if data then
 					if data.id == message_prefix.."#"..msgid then
 						return true, data
@@ -1352,9 +1408,9 @@ local function HarmonyAPI()
 	--]]
 	GetCurrentActivtyID = function(noclose)
 		jobStat = JobStatus.IN_PROGRESS
-		if not polling_enabled then Connect() end
+		if polling_enabled == 0 then Connect() end
 		local res, data, cde, msg = send_request("vnd.logitech.harmony\\/vnd.logitech.harmony.engine?getCurrentActivity")
-		if (not polling_enabled) and (noclose ~= true) then Close() end
+		if (polling_enabled == 0) and (noclose ~= true) then Close() end
 		if res then 
 			if data.code == 200 then
 				res = true
@@ -1398,7 +1454,7 @@ local function HarmonyAPI()
 					data = nil
 					cde = cde1 or 503
 					msg = msg1 or "No response from hub."
-					if not polling_enabled then Close() end
+					if polling_enabled == 0 then Close() end
 					jobStat = JobStatus.NO_JOB
 				end
 				return res, data, cde, msg
@@ -1419,9 +1475,9 @@ local function HarmonyAPI()
 		local chnl = channel or ""
 		if chnl ~= "" then
 			jobStat = JobStatus.IN_PROGRESS
-			if not polling_enabled then Connect() end
+			if polling_enabled == 0 then Connect() end
 			local res, data, cde, msg = send_request("harmony.engine?changeChannel", format('{"timestamp":10000,"channel":%s}',chnl))
-			if not polling_enabled then Close() end
+			if polling_enabled == 0 then Close() end
 			jobStat = JobStatus.NO_JOB
 			return res, data, cde, msg
 		else
@@ -1442,7 +1498,7 @@ local function HarmonyAPI()
 			local params = format('{"status":"%s","timestamp":0,"verb":"render","action":"%s"}',prs,action)
 			-- First key-press down command
 			jobStat = JobStatus.IN_PROGRESS
-			if not polling_enabled then Connect() end
+			if polling_enabled == 0 then Connect() end
 			-- For Hold action sequesce we must use the same message ID. Lets use HoldAction with command.
 			-- Depends on device if we get a response. Assume none.
 			local res1, data1, cde1, msg1 = send_request("vnd.logitech.harmony\\/vnd.logitech.harmony.engine?holdAction", params, "HOLD", false)
@@ -1456,7 +1512,7 @@ local function HarmonyAPI()
 				msg = msg1 or "No response from hub."
 			end
 			jobStat = JobStatus.NO_JOB
-			if not polling_enabled then Close() end
+			if polling_enabled == 0 then Close() end
 		else
 			msg = "Missing parameters, Sequence ID"
 		end
@@ -1482,7 +1538,7 @@ local function HarmonyAPI()
 			local params = format('{"status":"%s","timestamp":%s,"verb":"render","action":"%s"}',prs,timestamp,action)
 			-- First key-press down command
 			jobStat = JobStatus.IN_PROGRESS
-			if not polling_enabled then Connect() end
+			if polling_enabled == 0 then Connect() end
 			-- For Hold action sequesce we must use the same message ID. Lets use HoldAction with command.
 			-- Depends on device if we get a response. Assume none.
 			local res1, data1, cde1, msg1 = send_request("vnd.logitech.harmony\\/vnd.logitech.harmony.engine?holdAction", params, "HOLD", false)
@@ -1510,7 +1566,7 @@ local function HarmonyAPI()
 				msg = msg1 or "No response from hub."
 			end
 			jobStat = JobStatus.NO_JOB
-			if not polling_enabled then Close() end
+			if polling_enabled == 0 then Close() end
 		else
 			msg = "Missing parameters, Device ID, Command"
 		end
@@ -1522,9 +1578,9 @@ local function HarmonyAPI()
 	local GetConfig = function()
 		log.Debug("Retrieve the config from Hub.")
 		jobStat = JobStatus.IN_PROGRESS
-		if not polling_enabled then Connect() end
+		if polling_enabled == 0 then Connect() end
 		local res, data, cde, msg = send_request("vnd.logitech.harmony\\/vnd.logitech.harmony.engine?config")
-		if not polling_enabled then Close() end
+		if polling_enabled == 0 then Close() end
 		jobStat = JobStatus.NO_JOB
 		return res, data, cde, msg
 	end
@@ -1534,9 +1590,9 @@ local function HarmonyAPI()
 	local GetAutomationConfig = function()
 		log.Debug("Retrieve the automation config from Hub.")
 		jobStat = JobStatus.IN_PROGRESS
-		if not polling_enabled then Connect() end
+		if polling_enabled == 0 then Connect() end
 		local res, data, cde, msg = send_request("proxy.resource?get", '{"uri":"dynamite://HomeAutomationService/Config/"}')
-		if not polling_enabled then Close() end
+		if polling_enabled == 0 then Close() end
 		jobStat = JobStatus.NO_JOB
 		return res, data, cde, msg
 	end
@@ -1545,9 +1601,9 @@ local function HarmonyAPI()
 	local GetAutomationState = function(pars)
 		log.Debug("GetAutomationState from Hub.")
 		jobStat = JobStatus.IN_PROGRESS
-		if not polling_enabled then Connect() end
+		if polling_enabled == 0 then Connect() end
 		local res, data, cde, msg = send_request("harmony.automation?getState", pars or "{}")
-		if not polling_enabled then Close() end
+		if polling_enabled == 0 then Close() end
 		jobStat = JobStatus.NO_JOB
 		return res, data, cde, msg
 	end
@@ -1556,9 +1612,9 @@ local function HarmonyAPI()
 	local SetAutomationState = function(params)
 		log.Debug("SetAutomationState.")
 		jobStat = JobStatus.IN_PROGRESS
-		if not polling_enabled then Connect() end
+		if polling_enabled == 0 then Connect() end
 		local res, data, cde, msg = send_request("harmony.automation?setState", params)
-		if not polling_enabled then Close() end
+		if polling_enabled == 0 then Close() end
 		jobStat = JobStatus.NO_JOB
 		return res, data, cde, msg
 	end
@@ -1568,9 +1624,9 @@ local function HarmonyAPI()
 	--]]
 	local GetStateDigest = function()
 		jobStat = JobStatus.IN_PROGRESS
-		if not polling_enabled then Connect() end
+		if polling_enabled == 0 then Connect() end
 		local res, data, cde, msg = send_request("vnd.logitech.connect\\/vnd.logitech.statedigest?get")
-		if not polling_enabled then Close() end
+		if polling_enabled == 0 then Close() end
 		if res then 
 			-- The user callback may also want process state digest details.
 			HH_HandleCallBack(data)
@@ -1580,24 +1636,30 @@ local function HarmonyAPI()
 	end
 	
 	-- When called with true then the connection to the Hub will be kept open
-	-- Can be toggled at any time.
+	-- Can be toggled at any time. 
+---Need to detect if we are in HH_reconnect and stop that.........
 	local SetHubPolling = function(poll)
-		if polling_enabled == poll then return true, 200 end
-		polling_enabled = poll
-		if poll then
+		local new_pe = (poll and 1 or 0)
+		if polling_enabled == new_pe then return true, 200 end
+		polling_enabled = new_pe
+		if polling_enabled == 1 then
 			-- re-open the connection
-			local res, data, cde, msg = Connect()
+			local res, data, cde, msg = HH_reconnect(1)
+--			local res, data, cde, msg = Connect()
 			if res then
 			else
 				log.Error("SetPolling, could not reconnect to Hub. Err : %s, %s", cde, msg)
 			end
 			return res, data, cde, msg
+		else
+			-- Make sure the HH_reconnect loop, if any gets stopped
+			local res, data, cde, msg = HH_reconnect(-1)
+			return res, data, cde, msg
 		end	
-		return true, 200
 	end
 	-- Return current polling status.
 	local GetHubPolling = function()
-		return polling_enabled
+		return polling_enabled == 1
 	end	
 	
 	-- Add a callback for a given command on top of internal handing
@@ -1616,7 +1678,7 @@ local function HarmonyAPI()
 		ipa = _ipa or ""
 		port = _port or 8088
 		message_prefix = _msg_prf
-		polling_enabled = _poll
+		polling_enabled = (_poll and 1 or 0)
 		hub_data.remote_id = _rem_id
 		hub_data.domain = _domain
 		-- Need to make this global for luup.call_delay use. 
@@ -4002,11 +4064,13 @@ end
 function Harmony_init(lul_device)
 	HData.DEVICE = lul_device
 	-- start Utility API's
+	json = jsonAPI()
 	log = logAPI()
 	var = varAPI()
 	utils = utilsAPI()
 	cnfgFile = ConfigFilesAPI()
 	Harmony = HarmonyAPI()
+	json.Initialize()
 	var.Initialize(HData.SIDS.MODULE, HData.DEVICE)
 	utils.Initialize()
 	var.Default("LogLevel", 1)
