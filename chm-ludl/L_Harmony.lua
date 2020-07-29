@@ -2,8 +2,11 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V4.3 21 April 2020
-	
+	V4.4 29 July 2020
+
+	V4.4 Changes:
+				Fix for openLuup without cjson installed.
+				Added start/stop sleep timer http requests.
 	V4.3 Changes:
 				json wrapper as cjson is a bit too sensitive to json file errors and has different return values than dkjson. Thanks to akbooer.
 				Fix for correct StopPolling.
@@ -208,8 +211,11 @@ local socket	= require("socket")
 local mime		= require("mime")
 local lfs		= require("lfs")
 local bit		= require("bit")
-local cjson 	= require("cjson")
 local dkjson 	= require("dkjson")
+local cjson		= nil
+if pcall(require("cjson")) then
+	cjson	= require("cjson")
+end
 
 if (type(bit) == "string") then
 	bit			= require("bit32")
@@ -218,7 +224,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = 4.3,
+	Version = 4.4,
 	UIVersion = 3.5,
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -1107,6 +1113,8 @@ local function HarmonyAPI()
 	local last_ping_success = 0
 	local ws_client
 	local message_prefix = ""
+	local ipa = ""
+	local port = 8088
 	local hub_data = { remote_id = "", friendly_name = "", email = "", account_id = "", domain = "" }
 	local callBacks = {}
 	local jobStat = JobStatus.NO_JOB
@@ -1635,6 +1643,18 @@ local function HarmonyAPI()
 		return res, data, cde, msg
 	end
 	
+	local SetSleepTimer = function(interv)
+		jobStat = JobStatus.IN_PROGRESS
+		if polling_enabled == 0 then Connect() end
+		local res, data, cde, msg = send_request("harmony.engine?setsleeptimer", '{"interval": '..tostring(interv) .. '}')
+		if polling_enabled == 0 then Close() end
+		jobStat = JobStatus.NO_JOB
+		return res, data, cde, msg
+	end
+	
+	local CancelSleepTimer = function()
+		return SetSleepTimer(-1)
+	end
 	-- When called with true then the connection to the Hub will be kept open
 	-- Can be toggled at any time. 
 ---Need to detect if we are in HH_reconnect and stop that.........
@@ -1702,6 +1722,8 @@ local function HarmonyAPI()
 		GetJobStatus = GetJobStatus,
 		GetHubDetails = GetHubDetails,
 		GetStateDigest = GetStateDigest,
+		SetSleepTimer = SetSleepTimer,
+		CancelSleepTimer = CancelSleepTimer,
 		GetCurrentActivtyID = GetCurrentActivtyID,
 		StartActivity = StartActivity,
 		ChangeChannel = ChangeChannel,
@@ -3318,7 +3340,7 @@ end
 
 -- Send ChangeChannel to Harmony Hub
 -- Input: newChannel = new Channel number to select
--- Output: True on success, or JSON when called from HTTPhandler
+-- Output: True on success
 function Harmony_ChangeChannel(newChannel)
 	if (HData.Plugin_Disabled == true) then
 		log.Warning("ChangeChannel : Plugin disabled.")
@@ -3344,6 +3366,58 @@ function Harmony_ChangeChannel(newChannel)
 	else
 		return nil, nil, 404, "no newChannel specified"
 	end	
+end
+
+-- Send SetSleepTimer to Harmony Hub
+-- Input: interval = interval in second for sleep timer
+-- Output: True on success
+function Harmony_SetSleepTimer(interval)
+	if (HData.Plugin_Disabled == true) then
+		log.Warning("SetSleepTimer : Plugin disabled.")
+		return nil, nil, 503,"Plugin disabled."
+	end
+	if (GetBusy()) then 
+		log.Warning("SetSleepTimer communication is busy")
+		return nil, nil, 307,"Communication is busy."
+	end
+	local int = tonumber(interval) or 0
+	log.Debug("SetSleepTimer, interval : %s.",int)
+	if (chnl ~= 0) then 
+		SetBusy(true, true)
+		local res, data, cde, msg = Harmony.SetSleepTimer(int)
+		if res then
+			SetLastCommand("SetSleepTimer")
+		else
+			log.Error("SetSleepTimer, ERROR %d, %s.",cde,msg)
+		end	
+		SetBusy(false,true)
+		return res, data, cde, msg
+	else
+		return nil, nil, 404, "no interval specified"
+	end	
+end
+
+-- Send CancelSleepTimer to Harmony Hub
+-- Input: -
+-- Output: True on success
+function Harmony_CancelSleepTimer()
+	if (HData.Plugin_Disabled == true) then
+		log.Warning("CancelSleepTimer : Plugin disabled.")
+		return nil, nil, 503,"Plugin disabled."
+	end
+	if (GetBusy()) then 
+		log.Warning("CancelSleepTimer communication is busy")
+		return nil, nil, 307,"Communication is busy."
+	end
+	SetBusy(true, true)
+	local res, data, cde, msg = Harmony.CancelSleepTimer()
+	if res then
+		SetLastCommand("CancelSleepTimer")
+	else
+		log.Error("CancelSleepTimer, ERROR %d, %s.",cde,msg)
+	end	
+	SetBusy(false,true)
+	return res, data, cde, msg
 end
 
 -- Send a key-press comamnd from a child device that maps to a Hub device.
@@ -3466,6 +3540,10 @@ function HTTP_Harmony (lul_request, lul_parameters)
 			res, data, cde, msg = Harmony_StartActivity(cmdp1) 
 		elseif (cmd == "change_channel") then 
 			res, data, cde, msg = Harmony_ChangeChannel(cmdp1) 
+		elseif (cmd == "set_sleep_timer") then 
+			res, data, cde, msg = Harmony_SetSleepTimer(cmdp1) 
+		elseif (cmd == "cancel_sleep_timer") then 
+			res, data, cde, msg = Harmony_CancelSleepTimer() 
 		elseif (cmd == "find_activity_by_name") then 
 			res, data = Harmony_FindActivityByName(cmdp1) 
 		elseif (cmd == "find_activity_by_id") then 
@@ -4278,7 +4356,7 @@ function Harmony_init(lul_device)
 	local poll = var.GetBoolean("HubPolling")
 	local remoteID = var.Get("RemoteID")  -- Pass any known remote ID.
 	local remoteDomain = var.Get("Domain")  -- Pass any known remote Domain.
-	if not Harmony.Initialize(ipAddress, port, remoteID, remoteDomain, "HH"..HData.DEVICE.."#rboer", poll) then 
+	if not Harmony.Initialize(ipAddress, nil, remoteID, remoteDomain, "HH"..HData.DEVICE.."#rboer", poll) then 
 		setStatusIcon(HData.Icon.ERROR)
 		log.Error("Initialize, unable to reconnect on IP address %s.", ipAddress)
 		var.Set("LinkStatus","Hub connection failed. Check IP Address.")

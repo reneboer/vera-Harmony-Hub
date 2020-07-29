@@ -2,7 +2,7 @@
 <!-- 
 	Module I_Harmony.xml
 	Written by R.Boer. 
-	V4.00, 12 April 2020
+	V4.4, 29 July 2020
 -->
 <implementation>
 	<specVersion>
@@ -68,7 +68,33 @@
 				end	
 				return 4,nil
 			</job>
-			<jobname>StartActivity</jobname>
+			<jobname>ChangeChannel</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>SetSleepTimer</name>
+			<job>
+				local res, data, cde, msg = Harmony_SetSleepTimer(lul_settings.Interval or "0")
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3,nil end
+				end	
+				return 4,nil
+			</job>
+			<jobname>SetSleepTimer</jobname>
+		</action>
+		<action>
+			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
+			<name>CancelSleepTimer</name>
+			<job>
+				local res, data, cde, msg = Harmony_CancelSleepTimer()
+				-- Check for busy state
+				if not res then
+					if cde == 307 then return 3,nil end
+				end	
+				return 4,nil
+			</job>
+			<jobname>CancelSleepTimer</jobname>
 		</action>
 		<action>
 			<serviceId>urn:rboer-com:serviceId:Harmony1</serviceId>
