@@ -2,8 +2,10 @@
 	Module L_Harmony.lua
 	
 	Written by R.Boer. 
-	V4.4 29 July 2020
+	V4.5 12 January 2021
 
+	V4.5 Changes:
+				Real fix for openLuup without cjson installed.
 	V4.4 Changes:
 				Fix for openLuup without cjson installed.
 				Added start/stop sleep timer http requests.
@@ -213,8 +215,8 @@ local lfs		= require("lfs")
 local bit		= require("bit")
 local dkjson 	= require("dkjson")
 local cjson		= nil
-if pcall(require("cjson")) then
-	cjson	= require("cjson")
+if pcall(require, "cjson") then
+	cjson		= require("cjson")
 end
 
 if (type(bit) == "string") then
@@ -224,7 +226,7 @@ end
 local Harmony -- Harmony API data object
 
 local HData = { -- Data used by Harmony Plugin
-	Version = 4.4,
+	Version = 4.5,
 	UIVersion = 3.5,
 	DEVICE = "",
 	Description = "Harmony Control",
@@ -785,6 +787,16 @@ end
 local function jsonAPI()
 local is_cj, is_dk
 
+	local function clean_cjson_nulls (x)    -- 2020.05.20  replace any cjson.null with nil. To use, maybe, thanks akbooer.
+		for n,v in pairs (x) do
+			if type(v) == "table" then 
+				clean_cjson_nulls (v) 
+			elseif v == cjson.null then 
+				x[n] = nil
+			end
+		end
+	end
+		
 	local function _init()
 		is_cj = type(cjson) == "table"
 		is_dk = type(dkson) == "table"
